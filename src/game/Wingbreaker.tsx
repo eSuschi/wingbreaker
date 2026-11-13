@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { DollarSign } from "lucide-react";
 import { Sfx } from "./audio";
-import { chapterOf, SKINS, UPGRADE_LIST, type SkinId, type UpgradeId } from "./meta";
+import { chapterOf, quipFor, SKINS, UPGRADE_LIST, type SkinId, type UpgradeId } from "./meta";
+import { ACTIONS, codeLabel, DEFAULT_BINDS, loadBinds, saveBinds, type Action, type Binds } from "./controls";
 import { drawWorld } from "./render";
 import {
   WORLD_H,
@@ -20,7 +21,8 @@ import {
   setMuted,
   setReduceMotion,
   setShake,
-  startOrResume,
+  startCoop,
+  startSolo,
   step,
   fitWorld,
   newMission,
@@ -52,6 +54,7 @@ type Ui = {
   upgrades: Record<UpgradeId, number>;
   cleared: boolean;
   lockShake: boolean;
+  quip: string;
 };
 
 function readUi(world: World, muted: boolean): Ui {
@@ -76,6 +79,7 @@ function readUi(world: World, muted: boolean): Ui {
     upgrades: { ...world.meta.upgrades },
     cleared: world.meta.cleared,
     lockShake: world.lockShake,
+    quip: quipFor(world.level),
   };
 }
 
@@ -97,11 +101,6 @@ declare global {
   }
 }
 
-const CODES_LEFT = new Set(["KeyA", "ArrowLeft"]);
-const CODES_RIGHT = new Set(["KeyD", "ArrowRight"]);
-const CODES_UP = new Set(["KeyW", "ArrowUp"]);
-const CODES_DOWN = new Set(["KeyS", "ArrowDown"]);
-
 export function Wingbreaker() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const worldRef = useRef<World | null>(null);
@@ -118,19 +117,27 @@ export function Wingbreaker() {
     record: false,
     perfect: true,
     clearCash: 0,
-    chapter: "Rdza",
-    nextChapter: "Rdza",
+    chapter: "Rust Harbor",
+    nextChapter: "Rust Harbor",
     hasSave: false,
     skin: "steel",
     owned: ["steel"],
-    upgrades: { hull: 0, magazine: 0, capacitor: 0, magnet: 0, salvage: 0 },
+    upgrades: { hull: 0, magazine: 0, capacitor: 0, magnet: 0, salvage: 0, trigger: 0, wings: 0, luck: 0 },
     cleared: false,
     lockShake: false,
+    quip: quipFor(1),
   });
   const [touch, setTouch] = useState(false);
   const [notice, setNotice] = useState("");
   const [armReset, setArmReset] = useState(false);
+  const [pick, setPick] = useState(false);
+  const [binds, setBinds] = useState<Binds>(() => loadBinds());
+  const [capture, setCapture] = useState<Action | null>(null);
   const touchFireRef = useRef(false);
+  const bindsRef = useRef(binds);
+  const captureRef = useRef<Action | null>(null);
+  bindsRef.current = binds;
+  captureRef.current = capture;
 
   useEffect(() => {
     const coarse = window.matchMedia("(pointer: coarse)").matches;
@@ -153,6 +160,7 @@ export function Wingbreaker() {
     const held = new Set<string>();
     let override: string[] | null = null;
     let bombLatch = false;
+    let wingBombLatch = false;
     let mouseFire = false;
     const pointer = { on: false, x: 0, y: 0, touch: false };
     const layout = { dpr: 1 };
@@ -188,16 +196,26 @@ export function Wingbreaker() {
 
     const readInput = (): InputState => {
       const keys = effective();
-      const left = [...CODES_LEFT].some((c) => keys.has(c));
-      const right = [...CODES_RIGHT].some((c) => keys.has(c));
-      const up = [...CODES_UP].some((c) => keys.has(c));
-      const down = [...CODES_DOWN].some((c) => keys.has(c));
-      const focus = keys.has("ShiftLeft") || keys.has("ShiftRight");
-      const bomb = keys.has("Space") || keys.has("KeyX");
+      const hit = (id: Action) => bindsRef.current[id].some((c) => keys.has(c));
+      let left = hit("p1Left");
+      let right = hit("p1Right");
+      let up = hit("p1Up");
+      let down = hit("p1Down");
+      if (!world.coop) {
+        if (keys.has("ArrowLeft")) left = true;
+        if (keys.has("ArrowRight")) right = true;
+        if (keys.has("ArrowUp")) up = true;
+        if (keys.has("ArrowDown")) down = true;
+      }
+      const focus = hit("p1Focus") || (!world.coop && keys.has("ShiftRight"));
+      const bomb = hit("p1Bomb");
       const edge = bomb && !bombLatch;
       bombLatch = bomb;
+      const wingBomb = !!world.coop && hit("p2Bomb");
+      const wingEdge = wingBomb && !wingBombLatch;
+      wingBombLatch = wingBomb;
       const keying = left || right || up || down;
-      const keyFire = keys.has("KeyZ") || keys.has("KeyJ") || keys.has("ControlLeft") || keys.has("ControlRight");
+      const keyFire = hit("p1Fire") || (!world.coop && (keys.has("ControlRight")));
       return {
         left,
         right,
@@ -207,6 +225,13 @@ export function Wingbreaker() {
         fire: mouseFire || touchFireRef.current || keyFire,
         bomb: edge,
         pointer: pointer.on && !keying && world.mode === "play" && world.player.alive ? { x: pointer.x, y: pointer.y - 78 } : null,
+        wingLeft: world.coop && hit("p2Left"),
+        wingRight: world.coop && hit("p2Right"),
+        wingUp: world.coop && hit("p2Up"),
+        wingDown: world.coop && hit("p2Down"),
+        wingFocus: world.coop && hit("p2Focus"),
+        wingFire: world.coop && hit("p2Fire"),
+        wingBomb: wingEdge,
       };
     };
 
@@ -226,6 +251,19 @@ export function Wingbreaker() {
     };
 
     const onKeyDown = (e: KeyboardEvent) => {
+      if (captureRef.current) {
+        e.preventDefault();
+        if (e.code !== "Escape") {
+          const id = captureRef.current;
+          const next = { ...bindsRef.current, [id]: [e.code] };
+          bindsRef.current = next;
+          saveBinds(next);
+          setBinds(next);
+        }
+        captureRef.current = null;
+        setCapture(null);
+        return;
+      }
       if (e.repeat) {
         held.add(e.code);
         return;
@@ -234,13 +272,18 @@ export function Wingbreaker() {
       if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Space"].includes(e.code)) e.preventDefault();
       if (e.code === "Enter") {
         sfx.unlock();
-        if (world.mode === "menu") startOrResume(world);
+        if (world.mode === "menu") setPick(true);
         else if (world.mode === "clear") nextLevel(world);
         else if (world.mode === "over") retryLevel(world);
         else if (world.mode === "pause") world.mode = "play";
         else if (world.mode === "victory") world.mode = "menu";
         sfx.drone(world.mode === "play");
         sync();
+      }
+      if (e.code === "Escape" && world.mode === "menu") {
+        setPick(false);
+        sync();
+        return;
       }
       if (e.code === "Escape" || e.code === "KeyP") {
         if (world.mode === "play" && e.code === "KeyP") world.mode = "pause";
@@ -410,7 +453,7 @@ export function Wingbreaker() {
     if (world) requestBomb(world);
   };
 
-  const money = ui.dollars.toLocaleString("pl-PL");
+  const money = ui.dollars.toLocaleString("en-US");
 
   return (
     <main className="fixed inset-0 select-none overflow-hidden bg-bg text-ink">
@@ -431,38 +474,69 @@ export function Wingbreaker() {
             <h1 className="font-display pr-16 text-5xl font-semibold tracking-wide text-ink sm:text-6xl">WINGBREAKER</h1>
             <div className="my-3 h-px w-16 bg-ember" />
             <p className="text-sm text-muted">
-              Poziom {String(ui.mission).padStart(3, "0")} · {ui.nextChapter}
-              {ui.cleared ? " · warta złamana" : ""}
+              Level {String(ui.mission).padStart(3, "0")} · {ui.nextChapter}
+              {ui.cleared ? " · watch broken" : ""}
             </p>
-            {ui.best > 0 && <p className="font-display text-lg text-cold">REKORD {String(ui.best).padStart(6, "0")}</p>}
+            {ui.best > 0 && <p className="font-display text-lg text-cold">BEST {String(ui.best).padStart(6, "0")}</p>}
             <div className="mt-4 flex flex-col gap-2">
-              <button type="button" className={row} onClick={() => act((w) => startOrResume(w))}>
+              <button
+                type="button"
+                className={row}
+                onClick={() => {
+                  sfxRef.current?.unlock();
+                  setPick(true);
+                }}
+              >
                 <span>START</span>
                 <span className="text-sm text-muted">{String(ui.mission).padStart(3, "0")}</span>
               </button>
               <button type="button" className={row} onClick={() => act((w) => openMode(w, "shop"))}>
-                <span>SKLEP</span>
+                <span>SHOP</span>
               </button>
-              <button type="button" className={row} onClick={() => { setArmReset(false); act((w) => openMode(w, "options")); }}>
-                <span>OPCJE</span>
+              <button type="button" className={row} onClick={() => { setArmReset(false); setCapture(null); act((w) => openMode(w, "options")); }}>
+                <span>OPTIONS</span>
               </button>
               <button type="button" className={row} disabled={!ui.hasSave} onClick={() => act((w) => resumeSaved(w))}>
-                <span>WCZYTAJ</span>
+                <span>LOAD</span>
               </button>
               <button
                 type="button"
                 className={row}
-                onClick={() => act((w) => { saveNow(w); toast("ZAPISANO"); })}
+                onClick={() => act((w) => { saveNow(w); toast("SAVED"); })}
               >
-                <span>ZAPISZ</span>
+                <span>SAVE</span>
               </button>
               <button type="button" className={row} onClick={() => act((w) => openMode(w, "standby"))}>
-                <span>WYJŚCIE</span>
+                <span>EXIT</span>
               </button>
             </div>
             <p className="mt-4 text-xs leading-relaxed text-muted">
-              {touch ? "Przeciągnij, żeby ruszyć. Osobny FIRE." : "Ruch · klik lub Z strzał · Shift skupienie · Spacja bomba · P pauza"}
+              {touch ? "Drag to move. Separate FIRE." : "Move · click or Z to shoot · Shift focus · Space bomb · P pause"}
             </p>
+          </div>
+        </div>
+      )}
+
+      {pick && ui.mode === "menu" && (
+        <div className="absolute inset-0 z-30 flex items-center justify-center bg-bg/70">
+          <div className="flex w-[min(92vw,420px)] flex-col gap-2 px-5">
+            <p className="font-display text-sm tracking-[0.28em] text-muted">SORTIE</p>
+            <h2 className="font-display text-4xl tracking-wide">WHO IS FLYING</h2>
+            <p className="text-sm text-muted">One keyboard. Two chairs if you are brave.</p>
+            <button type="button" className={row} onClick={() => act((w) => { setPick(false); startSolo(w); })}>
+              <span>SOLO</span>
+              <span className="text-sm text-muted">WASD</span>
+            </button>
+            <button type="button" className={row} onClick={() => act((w) => { setPick(false); startCoop(w); })}>
+              <span>TWO PILOTS</span>
+              <span className="text-sm text-muted">ARROWS</span>
+            </button>
+            <p className="text-xs leading-relaxed text-muted">
+              Pilot shoots with Z, bombs with Space. Wingman shoots with K, bombs with L. Change any of that in Options.
+            </p>
+            <button type="button" className={`${row} mt-1`} onClick={() => setPick(false)}>
+              <span>BACK</span>
+            </button>
           </div>
         </div>
       )}
@@ -471,8 +545,8 @@ export function Wingbreaker() {
         <div className="absolute inset-0 z-20 overflow-y-auto bg-bg/80">
           <div className="mx-auto flex w-[min(92vw,480px)] flex-col gap-3 px-5 py-16">
             <p className="font-display text-sm tracking-[0.28em] text-muted">HANGAR</p>
-            <h2 className="font-display text-4xl tracking-wide">SKLEP</h2>
-            <p className="text-sm text-muted">Ulepszenia wchodzą od następnego poziomu. Dolary zostają po śmierci.</p>
+            <h2 className="font-display text-4xl tracking-wide">SHOP</h2>
+            <p className="text-sm text-muted">Upgrades come in next level. Cash stays when you die.</p>
             {UPGRADE_LIST.map((item) => {
               const rank = ui.upgrades[item.id];
               const maxed = rank >= item.max;
@@ -493,7 +567,7 @@ export function Wingbreaker() {
                 </button>
               );
             })}
-            <p className="mt-3 font-display text-sm tracking-[0.22em] text-muted">SKÓRKI</p>
+            <p className="mt-3 font-display text-sm tracking-[0.22em] text-muted">SKINS</p>
             <div className="grid grid-cols-2 gap-2">
               {SKINS.map((skin) => {
                 const owned = ui.owned.includes(skin.id);
@@ -510,13 +584,13 @@ export function Wingbreaker() {
                       <span className="inline-block h-3 w-3 border border-line" style={{ background: skin.hull }} />
                       {skin.name}
                     </span>
-                    <span className="text-sm text-ember">{worn ? "NA ŁOŻU" : owned ? "ZAŁÓŻ" : `$${skin.price}`}</span>
+                    <span className="text-sm text-ember">{worn ? "WORN" : owned ? "WEAR" : `$${skin.price}`}</span>
                   </button>
                 );
               })}
             </div>
             <button type="button" className={`${row} mt-2`} onClick={() => act((w) => closeOverlay(w))}>
-              <span>WRÓĆ</span>
+              <span>BACK</span>
             </button>
           </div>
         </div>
@@ -524,8 +598,8 @@ export function Wingbreaker() {
 
       {ui.mode === "options" && (
         <div className="absolute inset-0 z-20 overflow-y-auto bg-bg/80">
-          <div className="mx-auto flex min-h-full w-[min(92vw,420px)] flex-col justify-center gap-2 px-5 py-16">
-            <h2 className="mb-2 font-display text-4xl tracking-wide">OPCJE</h2>
+          <div className="mx-auto flex min-h-full w-[min(94vw,640px)] flex-col justify-center gap-2 px-5 py-16">
+            <h2 className="mb-2 font-display text-4xl tracking-wide">OPTIONS</h2>
             <button
               type="button"
               className={row}
@@ -538,12 +612,40 @@ export function Wingbreaker() {
                 })
               }
             >
-              <span>DŹWIĘK</span>
-              <span className="text-sm text-muted">{ui.muted ? "WYŁ." : "WŁ."}</span>
+              <span>SOUND</span>
+              <span className="text-sm text-muted">{ui.muted ? "OFF" : "ON"}</span>
             </button>
             <button type="button" className={row} disabled={ui.lockShake} onClick={() => act((w) => setShake(w, !w.meta.shake))}>
-              <span>WSTRZĄS</span>
-              <span className="text-sm text-muted">{ui.lockShake ? "SYSTEM" : ui.shake ? "WŁ." : "WYŁ."}</span>
+              <span>SHAKE</span>
+              <span className="text-sm text-muted">{ui.lockShake ? "SYSTEM" : ui.shake ? "ON" : "OFF"}</span>
+            </button>
+            <p className="mt-3 font-display text-sm tracking-[0.22em] text-muted">CONTROLS</p>
+            <p className="text-xs text-muted">Click a row, then press the new key. Escape cancels.</p>
+            <div className="grid grid-cols-1 gap-1 sm:grid-cols-2">
+              {ACTIONS.map((rowItem) => (
+                <button
+                  key={rowItem.id}
+                  type="button"
+                  className={`${row} h-10 text-sm`}
+                  onClick={() => setCapture(rowItem.id)}
+                >
+                  <span>
+                    {rowItem.group === "Pilot" ? "P1" : "P2"} {rowItem.label}
+                  </span>
+                  <span className="text-ember">{capture === rowItem.id ? "KEY?" : binds[rowItem.id].map(codeLabel).join(" / ")}</span>
+                </button>
+              ))}
+            </div>
+            <button
+              type="button"
+              className={row}
+              onClick={() => {
+                setBinds(DEFAULT_BINDS);
+                saveBinds(DEFAULT_BINDS);
+                setCapture(null);
+              }}
+            >
+              <span>RESET KEYS</span>
             </button>
             <button
               type="button"
@@ -557,12 +659,12 @@ export function Wingbreaker() {
                 act((w) => newMission(w));
               }}
             >
-              <span>NOWA MISJA</span>
-              <span className="text-sm text-ember">{armReset ? "NA PEWNO" : "POZIOM 1"}</span>
+              <span>NEW RUN</span>
+              <span className="text-sm text-ember">{armReset ? "REALLY" : "LEVEL 1"}</span>
             </button>
-            <p className="text-xs text-muted">Nowa misja zeruje poziom i wynik. Dolary, skórki i ulepszenia zostają.</p>
-            <button type="button" className={`${row} mt-2`} onClick={() => act((w) => closeOverlay(w))}>
-              <span>WRÓĆ</span>
+            <p className="text-xs text-muted">A new run clears the level and the score. Cash, skins, and upgrades stay.</p>
+            <button type="button" className={`${row} mt-2`} onClick={() => { setCapture(null); act((w) => closeOverlay(w)); }}>
+              <span>BACK</span>
             </button>
           </div>
         </div>
@@ -571,11 +673,11 @@ export function Wingbreaker() {
       {ui.mode === "standby" && (
         <div className="absolute inset-0 z-20 flex items-center justify-center bg-bg/85">
           <div className="w-[min(92vw,380px)] px-5 text-center">
-            <p className="font-display text-sm tracking-[0.28em] text-muted">ŁĄCZNOŚĆ</p>
-            <h2 className="font-display mt-2 text-4xl tracking-wide">PRZERWANA</h2>
-            <p className="mt-3 text-sm text-muted">Karta zostaje otwarta. Wróć, kiedy chcesz.</p>
+            <p className="font-display text-sm tracking-[0.28em] text-muted">SIGNAL</p>
+            <h2 className="font-display mt-2 text-4xl tracking-wide">QUIET</h2>
+            <p className="mt-3 text-sm text-muted">The tab stays open. Come back when you want.</p>
             <button type="button" className={`${row} mt-6`} onClick={() => act((w) => openMode(w, "menu"))}>
-              <span>POWRÓT</span>
+              <span>RETURN</span>
             </button>
           </div>
         </div>
@@ -584,13 +686,13 @@ export function Wingbreaker() {
       {ui.mode === "pause" && (
         <div className="absolute inset-0 z-20 flex items-center justify-center bg-bg/55">
           <div className="flex w-[min(92vw,320px)] flex-col gap-2 px-5">
-            <p className="text-center font-display text-4xl tracking-[0.2em]">PAUZA</p>
+            <p className="text-center font-display text-4xl tracking-[0.2em]">PAUSED</p>
             <p className="text-center font-display text-2xl text-muted">{String(ui.score).padStart(6, "0")}</p>
             <button type="button" className={row} onClick={() => act((w) => openMode(w, "play"))}>
-              <span>WZNÓW</span>
+              <span>RESUME</span>
             </button>
-            <button type="button" className={row} onClick={() => act((w) => { saveNow(w); toast("ZAPISANO"); })}>
-              <span>ZAPISZ</span>
+            <button type="button" className={row} onClick={() => act((w) => { saveNow(w); toast("SAVED"); })}>
+              <span>SAVE</span>
             </button>
             <button type="button" className={row} onClick={() => act((w) => openMode(w, "menu"))}>
               <span>MENU</span>
@@ -602,16 +704,17 @@ export function Wingbreaker() {
       {ui.mode === "clear" && (
         <div className="absolute inset-0 z-20 flex items-center justify-center bg-bg/55">
           <div className="flex w-[min(92vw,380px)] flex-col gap-2 px-5">
-            <p className="font-display text-sm tracking-[0.28em] text-muted">POZIOM {String(ui.level).padStart(3, "0")}</p>
-            <h2 className="font-display text-4xl tracking-wide">{ui.perfect ? "CZYSTO" : "WYŁOM"}</h2>
+            <p className="font-display text-sm tracking-[0.28em] text-muted">LEVEL {String(ui.level).padStart(3, "0")}</p>
+            <h2 className="font-display text-4xl tracking-wide">{ui.perfect ? "CLEAN" : "BREACH"}</h2>
             <p className="text-sm text-muted">{ui.chapter}</p>
-            <p className="font-display text-2xl text-ember">+${ui.clearCash.toLocaleString("pl-PL")}</p>
-            <p className="text-sm text-muted">Dalej: {String(ui.mission).padStart(3, "0")} · {ui.nextChapter}</p>
+            <p className="text-sm italic text-cold">{ui.quip}</p>
+            <p className="font-display text-2xl text-ember">+${ui.clearCash.toLocaleString("en-US")}</p>
+            <p className="text-sm text-muted">Next: {String(ui.mission).padStart(3, "0")} · {ui.nextChapter}</p>
             <button type="button" className={row} onClick={() => act((w) => nextLevel(w))}>
-              <span>DALEJ</span>
+              <span>NEXT</span>
             </button>
             <button type="button" className={row} onClick={() => act((w) => openMode(w, "shop"))}>
-              <span>SKLEP</span>
+              <span>SHOP</span>
             </button>
             <button type="button" className={row} onClick={() => act((w) => openMode(w, "menu"))}>
               <span>MENU</span>
@@ -623,18 +726,18 @@ export function Wingbreaker() {
       {ui.mode === "over" && (
         <div className="absolute inset-0 z-20 flex items-center justify-center bg-bg/60">
           <div className="flex w-[min(92vw,380px)] flex-col gap-2 px-5">
-            <p className="font-display text-sm tracking-[0.28em] text-muted">STRATA</p>
+            <p className="font-display text-sm tracking-[0.28em] text-muted">DOWN</p>
             <p className="font-display text-5xl">{String(ui.score).padStart(6, "0")}</p>
-            <p className="text-sm text-muted">Poziom {String(ui.level).padStart(3, "0")} · {ui.chapter}</p>
+            <p className="text-sm text-muted">Level {String(ui.level).padStart(3, "0")} · {ui.chapter}</p>
             <p className={`font-display text-lg ${ui.record ? "text-ember" : "text-cold"}`}>
-              {ui.record ? "NOWY REKORD" : `REKORD ${String(ui.best).padStart(6, "0")}`}
+              {ui.record ? "NEW BEST" : `BEST ${String(ui.best).padStart(6, "0")}`}
             </p>
-            <p className="text-xs text-muted">Dolary zostają. Broń i życia wracają do zestawu z hangaru.</p>
+            <p className="text-xs text-muted">Cash stays. Guns and lives return to the hangar kit.</p>
             <button type="button" className={row} onClick={() => act((w) => retryLevel(w))}>
-              <span>JESZCZE RAZ</span>
+              <span>AGAIN</span>
             </button>
             <button type="button" className={row} onClick={() => act((w) => openMode(w, "shop"))}>
-              <span>SKLEP</span>
+              <span>SHOP</span>
             </button>
             <button type="button" className={row} onClick={() => act((w) => openMode(w, "menu"))}>
               <span>MENU</span>
@@ -646,15 +749,15 @@ export function Wingbreaker() {
       {ui.mode === "victory" && (
         <div className="absolute inset-0 z-20 flex items-center justify-center bg-bg/70">
           <div className="flex w-[min(92vw,420px)] flex-col gap-2 px-5">
-            <p className="font-display text-sm tracking-[0.28em] text-muted">POZIOM 100</p>
-            <h2 className="font-display text-4xl tracking-wide">WARTA ZŁAMANA</h2>
+            <p className="font-display text-sm tracking-[0.28em] text-muted">LEVEL 100</p>
+            <h2 className="font-display text-4xl tracking-wide">WATCH BROKEN</h2>
             <p className="font-display text-3xl">{String(ui.score).padStart(6, "0")}</p>
-            <p className="text-sm text-muted">Czarny Wartownik nie wraca. Hangar zostaje.</p>
+            <p className="text-sm text-muted">The black watch does not come back. The hangar stays.</p>
             <button type="button" className={row} onClick={() => act((w) => openMode(w, "menu"))}>
               <span>MENU</span>
             </button>
             <button type="button" className={row} onClick={() => act((w) => newMission(w))}>
-              <span>NOWA MISJA</span>
+              <span>NEW RUN</span>
             </button>
           </div>
         </div>

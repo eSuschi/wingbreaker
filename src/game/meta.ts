@@ -3,7 +3,7 @@ export const SAVE_KEY = "wingbreaker.save.v2";
 const LEGACY_BEST = "wingbreaker.best.v1";
 
 export type SkinId = "steel" | "ember" | "navy" | "graphite" | "bone";
-export type UpgradeId = "hull" | "magazine" | "capacitor" | "magnet" | "salvage";
+export type UpgradeId = "hull" | "magazine" | "capacitor" | "magnet" | "salvage" | "trigger" | "wings" | "luck";
 
 export type Upgrades = Record<UpgradeId, number>;
 
@@ -27,6 +27,7 @@ export type RunSnap = {
   shield: boolean;
   score: number;
   feed: number;
+  coop?: boolean;
 };
 
 export type SaveFile = {
@@ -46,16 +47,16 @@ export type Chapter = {
 };
 
 export const CHAPTERS: Chapter[] = [
-  { name: "Rdza", boss: "Rdzawy Strażnik", hull: "#3a2a24", edge: "#c4a090", accent: "#c44536", flame: "#e07a3d", sky: "#140e0c" },
-  { name: "Szare Morze", boss: "Szary Kil", hull: "#243038", edge: "#9eb0b8", accent: "#7eb6d6", flame: "#6a8ea3", sky: "#0c1418" },
-  { name: "Linia Piasku", boss: "Diunowy Taran", hull: "#3a3428", edge: "#cbbfa6", accent: "#c4a574", flame: "#c4a36a", sky: "#16130e" },
-  { name: "Nocny Błękit", boss: "Nocna Lanca", hull: "#1c2433", edge: "#8ea0b8", accent: "#8eb4d8", flame: "#4d6d88", sky: "#0a0e16" },
-  { name: "Ochra", boss: "Ochrowa Korona", hull: "#3a3420", edge: "#d2c08a", accent: "#d2a84a", flame: "#c4923a", sky: "#141208" },
-  { name: "Oliwka", boss: "Oliwkowa Paszcza", hull: "#2a3328", edge: "#a8b4a4", accent: "#8aa384", flame: "#6e8a62", sky: "#0e120f" },
-  { name: "Kość", boss: "Kościany Święty", hull: "#d9d3c8", edge: "#6e675f", accent: "#c44536", flame: "#efeae2", sky: "#12110f" },
-  { name: "Miedź", boss: "Miedziany Dzwon", hull: "#3a2c24", edge: "#d09a72", accent: "#e07a3d", flame: "#a85a32", sky: "#140e0c" },
-  { name: "Burzowy Łupek", boss: "Burzowy Kil", hull: "#2a3138", edge: "#b7c0c8", accent: "#9aa8b5", flame: "#6e7c88", sky: "#0c1014" },
-  { name: "Czarny Wartownik", boss: "Czarny Wartownik", hull: "#16181c", edge: "#8e99a3", accent: "#e07a3d", flame: "#c44536", sky: "#07080a" },
+  { name: "Rust Harbor", boss: "The Burnt Regent", hull: "#3a2a24", edge: "#c4a090", accent: "#c44536", flame: "#e07a3d", sky: "#140e0c" },
+  { name: "Grey Sea", boss: "Admiral Bubbles", hull: "#243038", edge: "#9eb0b8", accent: "#7eb6d6", flame: "#6a8ea3", sky: "#0c1418" },
+  { name: "Sand Line", boss: "Dusty Spike", hull: "#3a3428", edge: "#cbbfa6", accent: "#c4a574", flame: "#c4a36a", sky: "#16130e" },
+  { name: "Night Blue", boss: "Mirrorball", hull: "#1c2433", edge: "#8ea0b8", accent: "#8eb4d8", flame: "#4d6d88", sky: "#0a0e16" },
+  { name: "Ochre Mesa", boss: "Count Bathtime", hull: "#3a3420", edge: "#d2c08a", accent: "#d2a84a", flame: "#c4923a", sky: "#141208" },
+  { name: "Wild Olive", boss: "Nana Nimbo", hull: "#2a3328", edge: "#a8b4a4", accent: "#8aa384", flame: "#6e8a62", sky: "#0e120f" },
+  { name: "Bone Coast", boss: "Baron Crumb", hull: "#d9d3c8", edge: "#6e675f", accent: "#c44536", flame: "#efeae2", sky: "#12110f" },
+  { name: "Copper Yard", boss: "Ambassador Peel", hull: "#3a2c24", edge: "#d09a72", accent: "#e07a3d", flame: "#a85a32", sky: "#140e0c" },
+  { name: "Storm Slate", boss: "Cabinet Greg", hull: "#2a3138", edge: "#b7c0c8", accent: "#9aa8b5", flame: "#6e7c88", sky: "#0c1014" },
+  { name: "Black Watch", boss: "Stapler Prime", hull: "#16181c", edge: "#8e99a3", accent: "#e07a3d", flame: "#c44536", sky: "#07080a" },
 ];
 
 export type SkinDef = {
@@ -69,20 +70,50 @@ export type SkinDef = {
 };
 
 export const SKINS: SkinDef[] = [
-  { id: "steel", name: "Stal", price: 0, hull: "#c9d0d7", edge: "#66727c", canopy: "#8ec4dc", hot: "#e7edf2" },
-  { id: "ember", name: "Żar", price: 900, hull: "#c46a3a", edge: "#7a3b22", canopy: "#f0c08a", hot: "#f4d2b0" },
-  { id: "navy", name: "Marynarka", price: 900, hull: "#8fb4cc", edge: "#1e3a52", canopy: "#d5e6f2", hot: "#e7f2f8" },
-  { id: "graphite", name: "Grafit", price: 700, hull: "#9aa1a8", edge: "#2a2e33", canopy: "#e07a3d", hot: "#d5dbe2" },
-  { id: "bone", name: "Kość", price: 1400, hull: "#e6e1d6", edge: "#8a8175", canopy: "#c44536", hot: "#f4f1ea" },
+  { id: "steel", name: "Steel", price: 0, hull: "#c9d0d7", edge: "#66727c", canopy: "#8ec4dc", hot: "#e7edf2" },
+  { id: "ember", name: "Ember", price: 640, hull: "#c46a3a", edge: "#7a3b22", canopy: "#f0c08a", hot: "#f4d2b0" },
+  { id: "navy", name: "Navy", price: 640, hull: "#8fb4cc", edge: "#1e3a52", canopy: "#d5e6f2", hot: "#e7f2f8" },
+  { id: "graphite", name: "Graphite", price: 480, hull: "#9aa1a8", edge: "#2a2e33", canopy: "#e07a3d", hot: "#d5dbe2" },
+  { id: "bone", name: "Bone", price: 980, hull: "#e6e1d6", edge: "#8a8175", canopy: "#c44536", hot: "#f4f1ea" },
 ];
 
 export const UPGRADE_LIST: { id: UpgradeId; name: string; blurb: string; max: number; prices: number[] }[] = [
-  { id: "magnet", name: "Magnes", blurb: "Szerszy zasięg zbierania łupów.", max: 2, prices: [320, 900] },
-  { id: "salvage", name: "Złom", blurb: "+15% dolarów z łupów za każdy poziom.", max: 3, prices: [380, 860, 1700] },
-  { id: "magazine", name: "Magazyn", blurb: "+1 bomba na starcie poziomu.", max: 2, prices: [640, 1500] },
-  { id: "hull", name: "Kadłub", blurb: "+1 życie na starcie poziomu.", max: 2, prices: [860, 2100] },
-  { id: "capacitor", name: "Kondensator", blurb: "Startujesz z bronią na poziomie 2.", max: 1, prices: [1400] },
+  { id: "wings", name: "Wingtips", blurb: "Hangar gun starts one rank higher.", max: 2, prices: [420, 980] },
+  { id: "capacitor", name: "Capacitor", blurb: "Start each level at gun 2, on top of wingtips.", max: 1, prices: [480] },
+  { id: "trigger", name: "Hair trigger", blurb: "Your gun cycles faster.", max: 2, prices: [220, 520] },
+  { id: "luck", name: "Greasy palm", blurb: "Enemies drop more junk.", max: 2, prices: [180, 440] },
+  { id: "magnet", name: "Magnet", blurb: "Floor loot slides farther toward you.", max: 2, prices: [160, 400] },
+  { id: "salvage", name: "Scrap", blurb: "+15% cash per rank.", max: 3, prices: [160, 380, 720] },
+  { id: "magazine", name: "Locker", blurb: "+1 bomb at the start of a level.", max: 2, prices: [300, 680] },
+  { id: "hull", name: "Hull", blurb: "+1 life at the start of a level.", max: 2, prices: [400, 920] },
 ];
+
+export const QUIPS = [
+  "That was not a strategy. That was a panic with good timing.",
+  "They brought snacks. You brought math.",
+  "Level four and they are already negotiating.",
+  "You can dodge. They brought a lifestyle.",
+  "Accounting has entered the airspace.",
+  "Nobody told the duck this was a boss fight.",
+  "The pizza knew what it did.",
+  "You are now the problem they will mention in the meeting.",
+  "Clean run. Your hands are still lying about it.",
+  "They shot first. It was still rude.",
+  "A high score is a personality. Unfortunately.",
+  "The stapler had a calendar invite.",
+  "Greg did not want to be here either.",
+  "That poop had a trajectory and a dream.",
+  "You lived. The goldfish will write a report.",
+  "Nana is disappointed, which is the real damage.",
+  "Two ships, one bad decision. Classic.",
+  "The cactus called you partner. Do not get attached.",
+  "Afterburner is just panic with a budget.",
+  "They will not put this on the brochure.",
+];
+
+export function quipFor(level: number) {
+  return QUIPS[Math.abs(level * 7 + 3) % QUIPS.length];
+}
 
 export function freshCampaign(): Campaign {
   return {
@@ -92,7 +123,7 @@ export function freshCampaign(): Campaign {
     cleared: false,
     skin: "steel",
     owned: ["steel"],
-    upgrades: { hull: 0, magazine: 0, capacitor: 0, magnet: 0, salvage: 0 },
+    upgrades: { hull: 0, magazine: 0, capacitor: 0, magnet: 0, salvage: 0, trigger: 0, wings: 0, luck: 0 },
     mute: false,
     shake: true,
   };
@@ -162,6 +193,9 @@ function sanitize(raw: Partial<Campaign> | null | undefined, legacyBest: number)
       capacitor: clampInt(up.capacitor, 0, 1, 0),
       magnet: clampInt(up.magnet, 0, 2, 0),
       salvage: clampInt(up.salvage, 0, 3, 0),
+      trigger: clampInt(up.trigger, 0, 2, 0),
+      wings: clampInt(up.wings, 0, 2, 0),
+      luck: clampInt(up.luck, 0, 2, 0),
     },
     mute: Boolean(raw.mute),
     shake: raw.shake !== false,
@@ -178,6 +212,7 @@ function sanitizeRun(raw: RunSnap | null | undefined): RunSnap | null {
     shield: Boolean(raw.shield),
     score: clampInt(raw.score, 0, 99_999_999, 0),
     feed: Math.max(0, Math.min(12, Number(raw.feed) || 0)),
+    coop: Boolean(raw.coop),
   };
 }
 
@@ -242,10 +277,16 @@ export function equipSkin(c: Campaign, id: SkinId) {
   return true;
 }
 
+export function luckMul(rank: number) {
+  return 1 + rank * 0.4;
+}
+
 export function loadoutOf(c: Campaign) {
+  const wings = Math.min(2, c.upgrades.wings);
+  const cap = c.upgrades.capacitor > 0 ? 1 : 0;
   return {
     lives: 3 + c.upgrades.hull,
     bombs: 2 + c.upgrades.magazine,
-    weapon: 1 + (c.upgrades.capacitor > 0 ? 1 : 0),
+    weapon: Math.min(5, 1 + cap + wings),
   };
 }

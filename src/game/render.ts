@@ -1,7 +1,62 @@
-import { CHAPTERS, chapterOf, skinDef } from "./meta";
+import { CHAPTERS, chapterIndex, chapterOf, skinDef, type SkinDef } from "./meta";
 import { drawBossCreature, drawCritter, drawLoot } from "./critters";
-import { WORLD_H, WORLD_W, type Enemy, type World } from "./world";
+import { WORLD_H, WORLD_W, type Enemy, type Player, type World } from "./world";
 
+const WING_SKIN: SkinDef = {
+  id: "navy",
+  name: "Wing",
+  price: 0,
+  hull: "#d7c4a1",
+  edge: "#6a5438",
+  canopy: "#e07a3d",
+  hot: "#f4e7cf",
+};
+
+const plates: (HTMLImageElement | null)[] = Array.from({ length: 10 }, () => null);
+const faces: (HTMLImageElement | null)[] = Array.from({ length: 10 }, () => null);
+
+function ready(img: HTMLImageElement | null) {
+  return !!img && img.complete && img.naturalWidth > 2;
+}
+
+function chapterPlate(index: number) {
+  if (typeof Image === "undefined") return null;
+  const i = ((index % 10) + 10) % 10;
+  if (!plates[i]) {
+    const img = new Image();
+    img.src = `/bg/${i}.jpg`;
+    plates[i] = img;
+  }
+  return ready(plates[i]) ? plates[i] : null;
+}
+
+function faceOf(look: number) {
+  if (typeof Image === "undefined") return null;
+  const i = ((look % 10) + 10) % 10;
+  if (!faces[i]) {
+    const img = new Image();
+    img.src = `/critters/${i}.png`;
+    faces[i] = img;
+  }
+  return ready(faces[i]) ? faces[i] : null;
+}
+
+function cover(ctx: CanvasRenderingContext2D, img: HTMLImageElement) {
+  const ir = img.width / img.height;
+  const cr = WORLD_W / WORLD_H;
+  let dw = WORLD_W;
+  let dh = WORLD_H;
+  let dx = 0;
+  let dy = 0;
+  if (cr > ir) {
+    dh = WORLD_W / ir;
+    dy = (WORLD_H - dh) / 2;
+  } else {
+    dw = WORLD_H * ir;
+    dx = (WORLD_W - dw) / 2;
+  }
+  ctx.drawImage(img, dx, dy, dw, dh);
+}
 const STEEL = "#d5dbe2";
 const STEEL_DIM = "#8e99a3";
 const EMBER = "#e07a3d";
@@ -27,10 +82,11 @@ export function drawWorld(ctx: CanvasRenderingContext2D, w: World, focus: boolea
 
   const showShip =
     w.mode === "play" || w.mode === "pause" || w.mode === "clear" || w.mode === "over" || w.mode === "victory";
-  if (w.player.alive && showShip) drawPlayer(ctx, w, focus);
+  if (showShip && w.player.alive) drawPlayer(ctx, w, w.player, focus, skinDef(w.meta.skin));
+  if (showShip && w.wing?.alive) drawPlayer(ctx, w, w.wing, false, WING_SKIN);
 
   for (const b of w.bullets) {
-    if (!b.friendly) drawBullet(ctx, b.x, b.y, b.vx, b.vy, b.r, false, false, false, b.tint);
+    if (!b.friendly) drawBullet(ctx, b.x, b.y, b.vx, b.vy, b.r, false, false, false, b.tint, b.shape ?? 0);
   }
 
   for (const p of w.parts) {
@@ -94,15 +150,20 @@ function paintHangar(ctx: CanvasRenderingContext2D) {
     hangarImg.onload = () => {
       hangarImg && (hangarImg.dataset.ready = "1");
     };
-    hangarImg.src = "/menu-bg.jpg";
+    hangarImg.src = "/bg/menu.jpg";
     hangarImg.onerror = () => {
-      fetch("/menu-bg.b64")
-        .then((r) => (r.ok ? r.text() : ""))
-        .then((b64) => {
-          if (!hangarImg || !b64.trim()) return;
-          hangarImg.src = `data:image/jpeg;base64,${b64.trim()}`;
-        })
-        .catch(() => {});
+      if (!hangarImg || hangarImg.dataset.fallback === "1") return;
+      hangarImg.dataset.fallback = "1";
+      hangarImg.src = "/menu-bg.jpg";
+      hangarImg.onerror = () => {
+        fetch("/menu-bg.b64")
+          .then((r) => (r.ok ? r.text() : ""))
+          .then((b64) => {
+            if (!hangarImg || !b64.trim()) return;
+            hangarImg.src = `data:image/jpeg;base64,${b64.trim()}`;
+          })
+          .catch(() => {});
+      };
     };
   }
   if (!hangarImg.complete || hangarImg.naturalWidth < 2) return false;
@@ -138,6 +199,15 @@ function drawBackdrop(ctx: CanvasRenderingContext2D, w: World) {
   if (hangar && paintHangar(ctx)) return;
 
   const ch = chapterOf(Math.max(1, w.level || 1));
+  const idx = chapterIndex(Math.max(1, w.level || 1));
+  const photo = chapterPlate(idx);
+  if (photo) {
+    cover(ctx, photo);
+    ctx.fillStyle = "rgba(5,8,12,0.22)";
+    ctx.fillRect(0, 0, WORLD_W, WORLD_H);
+    return;
+  }
+
   const g = ctx.createLinearGradient(0, 0, 0, WORLD_H);
   g.addColorStop(0, "#05070a");
   g.addColorStop(0.42, ch.sky);
@@ -211,6 +281,14 @@ function drawHud(ctx: CanvasRenderingContext2D, w: World) {
     ctx.fillRect(bx + i * seg + 1, by, seg - 3, 3);
   }
 
+  if (w.wing) {
+    const y2 = by - 8;
+    for (let i = 0; i < 6; i++) {
+      ctx.fillStyle = i < w.wing.weapon ? (w.wing.feed > 0 ? EMBER : "#d7c4a1") : "#1a2128";
+      ctx.fillRect(bx + i * seg + 1, y2, seg - 3, 2);
+    }
+  }
+
   for (let i = 0; i < 5; i++) {
     const x = WORLD_W - 22 - (4 - i) * 11;
     ctx.strokeStyle = STEEL_DIM;
@@ -247,8 +325,7 @@ function flame(ctx: CanvasRenderingContext2D, x: number, y: number, len: number)
   ctx.fill();
 }
 
-function drawPlayer(ctx: CanvasRenderingContext2D, w: World, focus: boolean) {
-  const p = w.player;
+function drawPlayer(ctx: CanvasRenderingContext2D, w: World, p: Player, focus: boolean, skin: SkinDef) {
   const blink = p.inv > 0 && Math.sin(w.time * 38) > 0;
   if (!blink) {
     ctx.save();
@@ -264,7 +341,6 @@ function drawPlayer(ctx: CanvasRenderingContext2D, w: World, focus: boolean) {
       flame(ctx, 15, 13, flick * 4);
     }
 
-    const skin = skinDef(w.meta.skin);
     ctx.fillStyle = skin.hull;
     ctx.strokeStyle = skin.edge;
     ctx.lineWidth = 1;
@@ -390,8 +466,15 @@ function drawEnemy(ctx: CanvasRenderingContext2D, e: Enemy, time: number, px: nu
   ctx.translate(e.x, e.y);
   const pal = CHAPTERS[e.ch] ?? CHAPTERS[0];
   if (e.kind === "boss") {
-    drawBossCreature(ctx, e.ch, time, e.flash > 0);
-    bar(ctx, 78, -58, e.hp / e.max, pal.accent);
+    const face = faceOf(e.ch);
+    if (face) ctx.drawImage(face, -78, -78, 156, 156);
+    else drawBossCreature(ctx, e.ch, time, e.flash > 0);
+    if (e.flash > 0) {
+      ctx.strokeStyle = "rgba(255,255,255,0.7)";
+      ctx.lineWidth = 3;
+      ctx.strokeRect(-70, -70, 140, 140);
+    }
+    bar(ctx, 78, -86, e.hp / e.max, pal.accent);
     if (e.mark === 0 && e.fire < 0.28 && e.fire > 0 && e.y < py) {
       const a = Math.atan2(py - e.y, px - e.x);
       ctx.strokeStyle = pal.accent;
@@ -402,8 +485,19 @@ function drawEnemy(ctx: CanvasRenderingContext2D, e: Enemy, time: number, px: nu
       ctx.stroke();
     }
   } else {
-    drawCritter(ctx, e.look, e.kind, time, e.spin, e.flash > 0);
-    if (e.kind === "cruiser") bar(ctx, 34, 26, e.hp / e.max, pal.accent);
+    const face = faceOf(e.look);
+    if (face) {
+      const s = e.kind === "cruiser" ? 92 : e.kind === "wedge" ? 74 : 64;
+      ctx.drawImage(face, -s / 2, -s / 2, s, s);
+      if (e.flash > 0) {
+        ctx.strokeStyle = "rgba(255,255,255,0.85)";
+        ctx.lineWidth = 2;
+        ctx.strokeRect(-s / 2 + 4, -s / 2 + 4, s - 8, s - 8);
+      }
+    } else {
+      drawCritter(ctx, e.look, e.kind, time, e.spin, e.flash > 0);
+    }
+    if (e.kind === "cruiser") bar(ctx, 40, 34, e.hp / e.max, pal.accent);
   }
   ctx.restore();
 }
@@ -426,6 +520,7 @@ function drawBullet(
   homing: boolean,
   hot: boolean,
   tint: number,
+  shape = 0,
 ) {
   ctx.save();
   ctx.translate(x, y);
@@ -448,22 +543,62 @@ function drawBullet(
       ctx.fillRect(-len * 0.35, -r * 0.35, len * 0.28, r * 0.7);
     }
   } else {
-    const pal = CHAPTERS[tint] ?? CHAPTERS[0];
-    ctx.fillStyle = pal.accent;
-    ctx.globalAlpha = 0.28;
-    ctx.beginPath();
-    ctx.arc(0, 0, r + 2.2, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.globalAlpha = 1;
-    ctx.beginPath();
-    ctx.arc(0, 0, r, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.fillStyle = "#f3e7e2";
-    ctx.beginPath();
-    ctx.arc(0, 0, Math.max(1, r * 0.38), 0, Math.PI * 2);
-    ctx.fill();
+    ctx.rotate(Math.atan2(vy, vx));
+    drawPoop(ctx, shape, Math.max(5.5, r * 1.7), tint);
   }
   ctx.restore();
+}
+
+function drawPoop(ctx: CanvasRenderingContext2D, shape: number, s: number, tint: number) {
+  const fills = ["#8d5a32", "#6d8f3c", "#c47b32", "#7a4e68", "#d9c7a4", "#4f6a3a"];
+  ctx.fillStyle = fills[(shape + tint) % fills.length];
+  if (shape === 3) {
+    ctx.beginPath();
+    ctx.moveTo(-s * 2.4, 0);
+    ctx.quadraticCurveTo(-s, s * 0.55, s * 0.2, s * 0.12);
+    ctx.quadraticCurveTo(s * 1.15, -s * 0.2, s * 1.45, 0);
+    ctx.quadraticCurveTo(s * 0.7, s * 0.4, -s * 0.15, s * 0.16);
+    ctx.quadraticCurveTo(-s * 1.3, -s * 0.25, -s * 2.4, 0);
+    ctx.fill();
+  } else if (shape === 2) {
+    ctx.beginPath();
+    ctx.arc(0, 0, s * 0.7, 0.5, Math.PI * 1.65);
+    ctx.quadraticCurveTo(-s * 0.15, s * 0.85, 0, s * 1.1);
+    ctx.quadraticCurveTo(s * 0.2, s * 0.35, s * 0.5, 0);
+    ctx.fill();
+  } else if (shape === 1) {
+    ctx.beginPath();
+    ctx.arc(0, 0, s * 0.7, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = "rgba(40,22,10,0.5)";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.arc(s * 0.08, s * 0.04, s * 0.26, 0.3, 2.1);
+    ctx.stroke();
+  } else if (shape === 4) {
+    ctx.beginPath();
+    ctx.ellipse(0, s * 0.12, s * 0.82, s * 0.58, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.moveTo(0, -s * 0.9);
+    ctx.lineTo(s * 0.26, -s * 0.18);
+    ctx.lineTo(-s * 0.26, -s * 0.18);
+    ctx.fill();
+  } else {
+    ctx.beginPath();
+    ctx.ellipse(0, s * 0.28, s * 0.78, s * 0.46, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.ellipse(0, -s * 0.12, s * 0.52, s * 0.4, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(0, -s * 0.42, s * 0.26, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.fillStyle = "rgba(255,236,210,0.7)";
+  ctx.beginPath();
+  ctx.ellipse(-s * 0.16, -s * 0.18, s * 0.14, s * 0.08, -0.5, 0, Math.PI * 2);
+  ctx.fill();
 }
 
 function drawPickup(ctx: CanvasRenderingContext2D, kind: string, x: number, y: number, time: number) {
