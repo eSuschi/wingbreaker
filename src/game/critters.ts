@@ -17,10 +17,15 @@ function eye(ctx: CanvasRenderingContext2D, x: number, y: number, r: number, hot
 }
 
 function ink(ctx: CanvasRenderingContext2D, color: string) {
-  ctx.strokeStyle = color;
-  ctx.lineWidth = 1.35;
+  ctx.save();
+  ctx.strokeStyle = "rgba(244,241,234,0.92)";
+  ctx.lineWidth = 3.4;
   ctx.lineJoin = "round";
   ctx.stroke();
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 1.4;
+  ctx.stroke();
+  ctx.restore();
 }
 
 export function drawCritter(
@@ -76,12 +81,12 @@ export function drawCritter(
 }
 
 function beetle(ctx: CanvasRenderingContext2D, flap: number, blink: boolean) {
-  ctx.fillStyle = "#4a2418";
+  ctx.fillStyle = "#d08958";
   ctx.beginPath();
   ctx.ellipse(-11, 1, 6, 9, -0.4, 0, Math.PI * 2);
   ctx.ellipse(11, 1, 6, 9, 0.4, 0, Math.PI * 2);
   ctx.fill();
-  ctx.fillStyle = "#8a4630";
+  ctx.fillStyle = "#f0c198";
   ctx.beginPath();
   ctx.ellipse(0, 1, 12, 14, 0, 0, Math.PI * 2);
   ctx.fill();
@@ -405,7 +410,14 @@ export function drawLoot(ctx: CanvasRenderingContext2D, kind: string, time: numb
   const bob = Math.sin(time * 4 + spin) * 2;
   ctx.save();
   ctx.translate(0, bob);
-  ctx.scale(1.28, 1.28);
+  ctx.fillStyle = "rgba(7,9,12,0.78)";
+  ctx.beginPath();
+  ctx.arc(0, 2, 16, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.strokeStyle = "rgba(231,234,238,0.7)";
+  ctx.lineWidth = 1.35;
+  ctx.stroke();
+  ctx.scale(1.4, 1.4);
   if (kind === "$") coin(ctx, time);
   else if (kind === "S") shield(ctx, time);
   else if (kind === "B") bomb(ctx);
