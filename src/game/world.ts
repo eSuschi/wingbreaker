@@ -20,6 +20,7 @@ import {
 
 export let WORLD_W = 1280;
 export let WORLD_H = 720;
+export let VIEW = 1;
 
 export type Kind = "dart" | "wedge" | "cruiser" | "drone" | "boss";
 export type PickupKind = "W" | "S" | "B" | "M" | "$";
@@ -175,8 +176,11 @@ function laneTop() {
 }
 
 export function fitWorld(w: World, cssW: number, cssH: number) {
-  const nw = Math.max(320, Math.round(cssW));
-  const nh = Math.max(420, Math.round(cssH));
+  const safeW = Math.max(1, cssW);
+  const safeH = Math.max(1, cssH);
+  const nh = 720;
+  const nw = Math.max(280, Math.round((nh * safeW) / safeH));
+  VIEW = safeH / nh;
   if (nw === WORLD_W && nh === WORLD_H) return;
   const sx = nw / WORLD_W;
   const sy = nh / WORLD_H;
@@ -1399,7 +1403,8 @@ export function step(w: World, dt: number, input: InputState) {
 
   if (w.mode === "play" && !w.bossUp && w.spawns.length === 0 && w.enemies.length === 0 && w.level > 0) {
     const floorY = WORLD_H - 32;
-    const hanging = w.pickups.some((pk) => pk.y < 9000 && (pk.y < floorY - 0.5 || pk.rest < 1.25));
+    const patience = Math.max(2.6, WORLD_W / 520);
+    const hanging = w.pickups.some((pk) => pk.y < 9000 && (pk.y < floorY - 0.5 || pk.rest < patience));
     if (!w.clearing) {
       w.clearing = true;
       w.banner = w.perfect ? "CZYSTO" : "WYŁOM";

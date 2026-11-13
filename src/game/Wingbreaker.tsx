@@ -6,6 +6,7 @@ import { drawWorld } from "./render";
 import {
   WORLD_H,
   WORLD_W,
+  VIEW,
   closeOverlay,
   createWorld,
   loadBest,
@@ -176,9 +177,10 @@ export function Wingbreaker() {
 
     const toWorld = (clientX: number, clientY: number) => {
       const rect = canvas.getBoundingClientRect();
+      const view = VIEW || 1;
       return {
-        x: clientX - rect.left,
-        y: clientY - rect.top,
+        x: (clientX - rect.left) / view,
+        y: (clientY - rect.top) / view,
       };
     };
 
@@ -347,13 +349,16 @@ export function Wingbreaker() {
       else if (killed) sfx.kill(false);
 
       const dpr = layout.dpr || Math.min(window.devicePixelRatio || 1, 2);
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      const view = VIEW || 1;
+      ctx.setTransform(dpr * view, 0, 0, dpr * view, 0, 0);
       ctx.clearRect(0, 0, WORLD_W, WORLD_H);
+      ctx.save();
       ctx.beginPath();
       ctx.rect(0, 0, WORLD_W, WORLD_H);
       ctx.clip();
       const keys = effective();
       drawWorld(ctx, world, keys.has("ShiftLeft") || keys.has("ShiftRight"));
+      ctx.restore();
 
       hudAcc += delta;
       if (world.mode !== lastMode || hudAcc > 0.15) {
