@@ -25,7 +25,9 @@ export function drawWorld(ctx: CanvasRenderingContext2D, w: World, focus: boolea
     if (b.friendly) drawBullet(ctx, b.x, b.y, b.vx, b.vy, b.r, true, b.homing, b.hot, 0);
   }
 
-  if (w.player.alive) drawPlayer(ctx, w, focus);
+  const showShip =
+    w.mode === "play" || w.mode === "pause" || w.mode === "clear" || w.mode === "over" || w.mode === "victory";
+  if (w.player.alive && showShip) drawPlayer(ctx, w, focus);
 
   for (const b of w.bullets) {
     if (!b.friendly) drawBullet(ctx, b.x, b.y, b.vx, b.vy, b.r, false, false, false, b.tint);
@@ -78,12 +80,6 @@ export function drawWorld(ctx: CanvasRenderingContext2D, w: World, focus: boolea
     ctx.fillRect(-20, -20, WORLD_W + 40, WORLD_H + 40);
   }
 
-  const vg = ctx.createRadialGradient(WORLD_W / 2, WORLD_H * 0.45, WORLD_H * 0.28, WORLD_W / 2, WORLD_H * 0.5, WORLD_H * 0.72);
-  vg.addColorStop(0, "rgba(0,0,0,0)");
-  vg.addColorStop(1, "rgba(0,0,0,0.38)");
-  ctx.fillStyle = vg;
-  ctx.fillRect(0, 0, WORLD_W, WORLD_H);
-
   ctx.restore();
 
   if (w.mode === "play" || w.mode === "pause" || w.mode === "clear" || w.mode === "over" || w.mode === "victory") drawHud(ctx, w);
@@ -125,11 +121,13 @@ function paintHangar(ctx: CanvasRenderingContext2D) {
   }
   ctx.fillStyle = "#07090c";
   ctx.fillRect(0, 0, WORLD_W, WORLD_H);
+  ctx.filter = "brightness(1.55) contrast(1.08)";
   ctx.drawImage(hangarImg, dx, dy, dw, dh);
+  ctx.filter = "none";
   const veil = ctx.createLinearGradient(0, 0, 0, WORLD_H);
-  veil.addColorStop(0, "rgba(7,9,12,0.2)");
-  veil.addColorStop(0.42, "rgba(7,9,12,0.28)");
-  veil.addColorStop(1, "rgba(7,9,12,0.78)");
+  veil.addColorStop(0, "rgba(7,9,12,0.08)");
+  veil.addColorStop(0.45, "rgba(7,9,12,0.16)");
+  veil.addColorStop(1, "rgba(7,9,12,0.55)");
   ctx.fillStyle = veil;
   ctx.fillRect(0, 0, WORLD_W, WORLD_H);
   return true;
