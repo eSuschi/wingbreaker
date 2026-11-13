@@ -159,13 +159,16 @@ export function drawWorld(ctx: CanvasRenderingContext2D, w: World, focus: boolea
     ctx.restore();
   }
 
-  ctx.font = "600 14px Barlow Condensed, sans-serif";
+  ctx.font = "600 16px Barlow Condensed, sans-serif";
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
   for (const f of w.floaters) {
-    const k = Math.max(0, f.life / 0.8);
-    ctx.globalAlpha = Math.min(1, k * 1.5);
-    ctx.fillStyle = f.ember ? EMBER : STEEL;
+    const k = Math.max(0, f.life / 1.25);
+    ctx.globalAlpha = Math.min(1, k * 1.6);
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = "rgba(8,10,14,0.88)";
+    ctx.strokeText(f.text, f.x, f.y);
+    ctx.fillStyle = f.ember ? "#ffb07a" : "#f4fbff";
     ctx.fillText(f.text, f.x, f.y);
   }
   ctx.globalAlpha = 1;
@@ -511,12 +514,6 @@ function drawEnemy(ctx: CanvasRenderingContext2D, e: Enemy, time: number, px: nu
     const face = bossOf(e.ch);
     if (face) blitSprite(ctx, face, 96, bob);
     else drawBossCreature(ctx, e.ch, time, e.flash > 0);
-    if (e.flash > 0 && face) {
-      ctx.globalCompositeOperation = "source-atop";
-      ctx.fillStyle = "rgba(255,255,255,0.45)";
-      ctx.fillRect(-70, -70, 140, 140);
-      ctx.globalCompositeOperation = "source-over";
-    }
     bar(ctx, 54, -56, e.hp / e.max, pal.accent);
     if (e.mark === 0 && e.fire < 0.28 && e.fire > 0 && e.y < py) {
       const a = Math.atan2(py - e.y, px - e.x);
@@ -532,12 +529,6 @@ function drawEnemy(ctx: CanvasRenderingContext2D, e: Enemy, time: number, px: nu
     const h = e.kind === "cruiser" ? 40 : e.kind === "wedge" ? 32 : e.kind === "drone" ? 28 : 26;
     if (face) blitSprite(ctx, face, h, bob);
     else drawCritter(ctx, e.look, e.kind, time, e.spin, e.flash > 0);
-    if (e.flash > 0 && face) {
-      ctx.globalCompositeOperation = "source-atop";
-      ctx.fillStyle = "rgba(255,255,255,0.5)";
-      ctx.fillRect(-40, -40, 80, 80);
-      ctx.globalCompositeOperation = "source-over";
-    }
     if (e.kind === "cruiser") bar(ctx, 22, h * 0.42, e.hp / e.max, pal.accent);
   }
   ctx.restore();
@@ -705,6 +696,17 @@ function drawPoop(ctx: CanvasRenderingContext2D, shape: number, s: number, tint:
 function drawPickup(ctx: CanvasRenderingContext2D, kind: string, x: number, y: number, time: number) {
   ctx.save();
   ctx.translate(x, y);
+  const pulse = 0.55 + Math.sin(time * 6) * 0.28;
+  ctx.strokeStyle = `rgba(255,244,220,${pulse})`;
+  ctx.lineWidth = 1.8;
+  ctx.beginPath();
+  ctx.arc(0, 0, 18 + Math.sin(time * 5) * 2, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.strokeStyle = "rgba(224,122,61,0.55)";
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.arc(0, 0, 13, 0, Math.PI * 2);
+  ctx.stroke();
   drawLoot(ctx, kind, time, x);
   ctx.restore();
 }

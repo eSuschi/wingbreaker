@@ -27,7 +27,7 @@ export let VIEW = 1;
 export type Kind = "dart" | "wedge" | "cruiser" | "drone" | "boss";
 export type PickupKind = "W" | "S" | "B" | "M" | "$";
 export type Mode = "menu" | "shop" | "options" | "standby" | "play" | "pause" | "over" | "clear" | "victory";
-export type Motion = "rank" | "sine" | "swoop" | "pincer" | "hold" | "boss";
+export type Motion = "rank" | "sine" | "swoop" | "pincer" | "hold" | "boss" | "spiral" | "zigzag";
 export type Cue = "kill" | "big" | "hit" | "graze" | "pickup" | "hurt" | "shield" | "bomb" | "wave" | "boss" | "clean" | "drive" | "missile";
 
 export type Bullet = {
@@ -640,20 +640,61 @@ function layout(n: number): Spawn[] {
   };
 
   if (slot === 1) {
-    rank(0.05, "dart", "rank", cols, H * 0.12);
-    rank(0.55, "dart", "rank", Math.max(4, cols - 1), H * 0.24);
+    if (ch === 0) {
+      const tight = Math.max(36, WORLD_W * 0.08);
+      rank(0.02, "dart", "rank", thick(cols), H * 0.1, tight);
+      rank(0.14, "dart", "zigzag", thick(Math.max(4, cols - 1)), H * 0.2, tight);
+      rank(0.26, "wedge", "rank", Math.max(5, thick(cols) - 2), H * 0.3, tight);
+      pocket(out, 0.34, H * 0.15, "spiral", ["drone", "wedge", "dart"]);
+    } else {
+      rank(0.05, "dart", "rank", cols, H * 0.12);
+      rank(0.55, "dart", "rank", Math.max(4, cols - 1), H * 0.24);
+    }
   } else if (slot === 2) {
-    rank(0.05, "dart", "rank", cols, H * 0.12);
-    rank(0.7, "wedge", "rank", Math.max(4, cols - 2), H * 0.26);
+    if (ch === 0) {
+      const tight = Math.max(36, WORLD_W * 0.08);
+      rank(0.02, "dart", "rank", thick(cols), H * 0.1, tight);
+      rank(0.14, "wedge", "spiral", thick(Math.max(4, cols - 2)), H * 0.2, tight);
+      rank(0.26, "dart", "zigzag", thick(Math.max(4, cols - 1)), H * 0.3, tight);
+      pocket(out, 0.36, H * 0.16, "zigzag", ["drone", "dart", "wedge"]);
+    } else {
+      rank(0.05, "dart", "rank", cols, H * 0.12);
+      rank(0.7, "wedge", "rank", Math.max(4, cols - 2), H * 0.26);
+    }
   } else if (slot === 3) {
     const gap = clamp(WORLD_W * 0.14, 70, 180);
-    const mids = 1 + Math.min(3, Math.floor(ch / 2));
-    for (let i = 0; i < mids; i++) {
-      out.push({ at: 0.12 + i * 0.18, kind: "wedge", x: WORLD_W / 2 - gap, motion: "sine", spin: i, oy: H * 0.16 });
-      out.push({ at: 0.12 + i * 0.18, kind: "wedge", x: WORLD_W / 2 + gap, motion: "sine", spin: i + 1, oy: H * 0.16 });
+    if (ch === 0) {
+      const tight = Math.max(36, WORLD_W * 0.08);
+      for (let i = 0; i < 3; i++) {
+        out.push({
+          at: 0.04 + i * 0.1,
+          kind: i === 1 ? "drone" : "wedge",
+          x: WORLD_W / 2 - gap,
+          motion: i % 2 ? "spiral" : "sine",
+          spin: i,
+          oy: H * 0.14,
+        });
+        out.push({
+          at: 0.04 + i * 0.1,
+          kind: i === 2 ? "dart" : "wedge",
+          x: WORLD_W / 2 + gap,
+          motion: i % 2 ? "zigzag" : "sine",
+          spin: i + 1,
+          oy: H * 0.14,
+        });
+      }
+      out.push({ at: 0.1, kind: "drone", x: WORLD_W / 2, motion: "spiral", oy: H * 0.24 });
+      pocket(out, 0.22, H * 0.28, "zigzag", ["dart", "wedge", "dart"]);
+      rank(0.38, "dart", "rank", thick(Math.max(5, cols - 1)), H * 0.34, tight);
+    } else {
+      const mids = 1 + Math.min(3, Math.floor(ch / 2));
+      for (let i = 0; i < mids; i++) {
+        out.push({ at: 0.12 + i * 0.18, kind: "wedge", x: WORLD_W / 2 - gap, motion: "sine", spin: i, oy: H * 0.16 });
+        out.push({ at: 0.12 + i * 0.18, kind: "wedge", x: WORLD_W / 2 + gap, motion: "sine", spin: i + 1, oy: H * 0.16 });
+      }
+      out.push({ at: 0.2, kind: "wedge", x: WORLD_W / 2, motion: "sine", oy: H * 0.28 });
+      rank(0.85, "dart", "rank", Math.max(5, cols - 1), H * 0.36);
     }
-    out.push({ at: 0.2, kind: "wedge", x: WORLD_W / 2, motion: "sine", oy: H * 0.28 });
-    rank(0.85, "dart", "rank", Math.max(5, cols - 1), H * 0.36);
   } else if (slot === 4) {
     const count = Math.min(14, 7 + ch);
     for (let i = 0; i < count; i++) {
@@ -741,6 +782,26 @@ function pushRow(out: Spawn[], at: number, kind: Kind, motion: Motion, cols: num
     const x = cols === 1 ? WORLD_W / 2 : inset + (span * i) / (cols - 1);
     out.push({ at, kind, x, motion, spin: i * 0.45, oy });
   }
+}
+
+function thick(n: number) {
+  const cap = WORLD_W < 480 ? 6 : 9;
+  const floor = WORLD_W < 480 ? 4 : 5;
+  return Math.min(cap, Math.max(floor, Math.round(n * 1.42)));
+}
+
+function pocket(out: Spawn[], at: number, oy: number, motion: Motion, kinds: Kind[]) {
+  const spots = [0.22, 0.5, 0.78];
+  kinds.forEach((kind, i) => {
+    out.push({
+      at: at + i * 0.07,
+      kind,
+      x: WORLD_W * spots[i % spots.length],
+      motion,
+      spin: i * 0.9,
+      oy,
+    });
+  });
 }
 
 function spawnEnemy(w: World, kind: Kind, x: number, motion: Motion, drop?: PickupKind, y = -28, vx = 0, spin?: number, oy?: number, value = 0) {
@@ -832,8 +893,25 @@ function ring(w: World, x: number, y: number, color: string, life: number, start
 }
 
 function float(w: World, x: number, y: number, text: string, ember = false) {
-  if (w.floaters.length > 8) w.floaters.shift();
-  w.floaters.push({ x, y, text, life: 0.8, ember });
+  if (w.floaters.length > 14) w.floaters.shift();
+  w.floaters.push({ x, y, text, life: 1.25, ember });
+}
+
+function cheer(w: World, x: number, y: number, color: string) {
+  ring(w, x, y, color, 0.26, 12, 1.7);
+  if (!w.reduce) ring(w, x, y, "#f4fbff", 0.14, 6, 0.9);
+}
+
+function sparkHit(w: World, e: Enemy, x: number, y: number) {
+  const pal = chapterOf(Math.max(1, e.ch * 10 + 1));
+  const gated = e.flash > 0.02;
+  burst(w, x, y, pal.accent, gated ? 3 : 5, 120, false);
+  burst(w, x, y, "#f7fbff", gated ? 2 : 4, 160, false);
+  if (!gated) {
+    ring(w, x, y, pal.edge, 0.2, Math.max(6, e.r * 0.35), 1.1);
+    ring(w, x, y, "#f4fbff", 0.12, Math.max(4, e.r * 0.15), 0.7);
+  }
+  e.flash = 0.08;
 }
 
 function addTrauma(w: World, amount: number) {
@@ -865,13 +943,20 @@ function bank(w: World, amount: number, x: number, y: number, show: boolean) {
 
 function killEnemy(w: World, e: Enemy) {
   const big = e.kind === "boss" || e.kind === "cruiser";
+  const heavy = big || e.kind === "drone";
   const pal = chapterOf(Math.max(1, e.ch * 10 + 1));
-  burst(w, e.x, e.y, pal.edge, big ? 16 : 8, big ? 200 : 130, true);
-  burst(w, e.x, e.y, e.kind === "boss" ? pal.accent : pal.flame, big ? 12 : 5, 160, false);
-  ring(w, e.x, e.y, big ? pal.accent : pal.edge, big ? 0.38 : 0.18, e.r, big ? 2 : 1);
-  addTrauma(w, e.kind === "boss" ? 0.75 : e.kind === "cruiser" ? 0.4 : 0.14);
-  if (e.kind === "boss") w.hitstop = 0.075;
-  else if (e.kind === "cruiser") w.hitstop = 0.028;
+  const chunks = e.kind === "boss" ? 26 : e.kind === "cruiser" ? 18 : e.kind === "drone" ? 14 : 8;
+  const sparks = e.kind === "boss" ? 16 : e.kind === "cruiser" ? 12 : e.kind === "drone" ? 9 : 5;
+  burst(w, e.x, e.y, pal.edge, chunks, big ? 240 : 155, true);
+  burst(w, e.x, e.y, e.kind === "boss" ? pal.accent : pal.flame, sparks, 190, false);
+  burst(w, e.x, e.y, "#f7fbff", heavy ? 8 : 3, 210, false);
+  ring(w, e.x, e.y, big ? pal.accent : pal.edge, heavy ? 0.42 : 0.2, e.r, heavy ? 2.4 : 1.1);
+  ring(w, e.x, e.y, "#f4fbff", heavy ? 0.28 : 0.14, Math.max(4, e.r * 0.45), 1);
+  const trauma = e.kind === "boss" ? 0.92 : e.kind === "cruiser" ? 0.62 : e.kind === "drone" ? 0.36 : e.kind === "wedge" ? 0.16 : 0.14;
+  addTrauma(w, trauma);
+  if (e.kind === "boss") w.hitstop = 0.12;
+  else if (e.kind === "cruiser") w.hitstop = 0.05;
+  else if (e.kind === "drone") w.hitstop = 0.026;
   w.cues.push(big ? "big" : "kill");
   addScore(w, e.score, e.x, e.y, big);
   if (e.kind === "cruiser") float(w, e.x, e.y - 22, FAUNA[e.look % FAUNA.length].toUpperCase(), true);
@@ -928,31 +1013,38 @@ function takePickup(w: World, kind: PickupKind, value: number, who: Player = w.p
       p.weapon += 1;
       w.cues.push("pickup");
       float(w, p.x, p.y - 28, gunName(p.weapon), true);
+      cheer(w, p.x, p.y, "#e07a3d");
     } else {
       p.feed = 6.5;
       w.cues.push("drive");
       float(w, p.x, p.y - 28, "AFTERBURNER", true);
+      cheer(w, p.x, p.y, "#e07a3d");
     }
   } else if (kind === "S") {
     p.shield = true;
     w.cues.push("pickup");
     float(w, p.x, p.y - 28, "SHIELD");
+    cheer(w, p.x, p.y, "#7eb6d6");
   } else if (kind === "B") {
     w.player.bombs = Math.min(5, w.player.bombs + 1);
     if (w.wing) w.wing.bombs = w.player.bombs;
     w.cues.push("pickup");
     float(w, p.x, p.y - 28, "BOMB", true);
+    cheer(w, p.x, p.y, "#e07a3d");
   } else if (kind === "$") {
     bank(w, value || 12, p.x, p.y, true);
+    cheer(w, p.x, p.y, "#d2a84a");
   } else if (kind === "M") {
     p.missiles = Math.min(9, p.missiles + 3);
     w.cues.push("pickup");
     float(w, p.x, p.y - 28, "MISSILES", true);
+    cheer(w, p.x, p.y, "#e07a3d");
   } else {
     w.chain = Math.min(40, w.chain + 8);
     w.chainT = 2.1;
     w.cues.push("drive");
     float(w, p.x, p.y - 28, "CHAIN", true);
+    cheer(w, p.x, p.y, "#e7eaee");
   }
 }
 
@@ -1380,6 +1472,11 @@ function present(w: World, dt: number, timers: boolean) {
     w.player.feed = Math.max(0, w.player.feed - dt);
     w.player.inv = Math.max(0, w.player.inv - dt);
     w.player.muzzle = Math.max(0, w.player.muzzle - dt);
+    if (w.wing) {
+      w.wing.feed = Math.max(0, w.wing.feed - dt);
+      w.wing.inv = Math.max(0, w.wing.inv - dt);
+      w.wing.muzzle = Math.max(0, w.wing.muzzle - dt);
+    }
     w.grazeCd = Math.max(0, w.grazeCd - dt);
   }
   if (w.mode === "pause") return;
@@ -1450,6 +1547,25 @@ function moveEnemy(w: World, e: Enemy, dt: number) {
     if (Math.abs(e.vx) < 20) e.vx = e.ox < WORLD_W / 2 ? 70 : -70;
     e.x += e.vx * dt;
     if (e.x < edgeOf(e.kind) || e.x > WORLD_W - edgeOf(e.kind)) e.vx *= -1;
+    contain(e);
+    return;
+  }
+  if (e.motion === "spiral") {
+    const nest = Math.min(e.oy || WORLD_H * 0.2, cap);
+    if (e.y < nest) e.y += 100 * dt;
+    else e.y = nest + Math.sin(e.t * 2.1) * 6;
+    const rad = 18 + Math.sin(e.t * 0.8) * 8;
+    e.x = e.ox + Math.cos(e.t * 2.2 + e.spin) * rad + w.formX * 0.35;
+    contain(e);
+    return;
+  }
+  if (e.motion === "zigzag") {
+    const nest = Math.min(e.oy || WORLD_H * 0.22, cap);
+    if (e.y < nest) e.y += 128 * dt;
+    else e.y = nest + Math.sin(e.t * 1.7 + e.spin) * 5;
+    const leg = 0.42;
+    const dir = Math.floor(e.t / leg) % 2 === 0 ? 1 : -1;
+    e.x += dir * 96 * dt;
     contain(e);
     return;
   }
@@ -1620,7 +1736,7 @@ export function step(w: World, dt: number, input: InputState) {
       if (e.hp <= 0) continue;
       if (Math.hypot(b.x - e.x, b.y - e.y) < e.r + b.r) {
         e.hp -= b.dmg;
-        e.flash = 0.07;
+        sparkHit(w, e, b.x, b.y);
         if ((b.splash ?? 0) > 0) {
           for (const other of w.enemies) {
             if (other === e || other.hp <= 0) continue;
@@ -1633,7 +1749,6 @@ export function step(w: World, dt: number, input: InputState) {
           b.pierce = left - 1;
           b.y -= e.r + b.r + 3;
         } else b.life = 0;
-        burst(w, b.x, b.y, b.hot ? "#e07a3d" : "#d6eef8", 3, 70, false);
         if (e.kind === "boss" || e.kind === "cruiser") w.cues.push("hit");
         break;
       }
