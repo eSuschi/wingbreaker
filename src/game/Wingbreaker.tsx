@@ -1,0 +1,694 @@
+import { useEffect, useRef, useState } from "react";
+import { DollarSign } from "lucide-react";
+import { Sfx } from "./audio";
+import { chapterOf, SKINS, UPGRADE_LIST, type SkinId, type UpgradeId } from "./meta";
+import { drawWorld } from "./render";
+import {
+  WORLD_H,
+  WORLD_W,
+  closeOverlay,
+  createWorld,
+  loadBest,
+  nextLevel,
+  openMode,
+  requestBomb,
+  resumeSaved,
+  retryLevel,
+  saveNow,
+  setCoarsePointer,
+  setMuted,
+  setReduceMotion,
+  setShake,
+  startOrResume,
+  step,
+  fitWorld,
+  newMission,
+  purchaseSkin,
+  purchaseUpgrade,
+  wearSkin,
+  type InputState,
+  type Mode,
+  type World,
+} from "./world";
+
+type Ui = {
+  mode: Mode;
+  score: number;
+  best: number;
+  level: number;
+  mission: number;
+  dollars: number;
+  muted: boolean;
+  shake: boolean;
+  record: boolean;
+  perfect: boolean;
+  clearCash: number;
+  chapter: string;
+  nextChapter: string;
+  hasSave: boolean;
+  skin: SkinId;
+  owned: SkinId[];
+  upgrades: Record<UpgradeId, number>;
+  cleared: boolean;
+  lockShake: boolean;
+};
+
+function readUi(world: World, muted: boolean): Ui {
+  const beaten = world.mode === "clear" || world.mode === "victory" ? world.level : world.meta.level;
+  return {
+    mode: world.mode,
+    score: world.score,
+    best: Math.max(world.best, world.meta.best),
+    level: world.level,
+    mission: world.meta.level,
+    dollars: world.meta.dollars,
+    muted,
+    shake: world.meta.shake,
+    record: world.record,
+    perfect: world.perfect,
+    clearCash: world.clearCash,
+    chapter: chapterOf(beaten).name,
+    nextChapter: chapterOf(world.meta.level).name,
+    hasSave: world.snap !== null,
+    skin: world.meta.skin,
+    owned: world.meta.owned.slice(),
+    upgrades: { ...world.meta.upgrades },
+    cleared: world.meta.cleared,
+    lockShake: world.lockShake,
+  };
+}
+
+const row =
+  "flex h-12 w-full items-center justify-between border border-line bg-bg/80 px-4 text-left font-display text-lg tracking-[0.14em] text-ink hover:border-ember disabled:cursor-default disabled:opacity-40";
+
+type Probe = {
+  getYaw: () => number;
+  getSpeed: () => number;
+  getX: () => number;
+  getY: () => number;
+  setKeys: (codes: string[]) => void;
+  getMode: () => string;
+};
+
+declare global {
+  interface Window {
+    __controlsTest?: Probe;
+  }
+}
+
+const CODES_LEFT = new Set(["KeyA", "ArrowLeft"]);
+const CODES_RIGHT = new Set(["KeyD", "ArrowRight"]);
+const CODES_UP = new Set(["KeyW", "ArrowUp"]);
+const CODES_DOWN = new Set(["KeyS", "ArrowDown"]);
+
+export function Wingbreaker() {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const worldRef = useRef<World | null>(null);
+  const sfxRef = useRef<Sfx | null>(null);
+  const [ui, setUi] = useState<Ui>({
+    mode: "menu",
+    score: 0,
+    best: 0,
+    level: 1,
+    mission: 1,
+    dollars: 0,
+    muted: false,
+    shake: true,
+    record: false,
+    perfect: true,
+    clearCash: 0,
+    chapter: "Rdza",
+    nextChapter: "Rdza",
+    hasSave: false,
+    skin: "steel",
+    owned: ["steel"],
+    upgrades: { hull: 0, magazine: 0, capacitor: 0, magnet: 0, salvage: 0 },
+    cleared: false,
+    lockShake: false,
+  });
+  const [touch, setTouch] = useState(false);
+  const [notice, setNotice] = useState("");
+  const [armReset, setArmReset] = useState(false);
+  const touchFireRef = useRef(false);
+
+  useEffect(() => {
+    const coarse = window.matchMedia("(pointer: coarse)").matches;
+    setTouch(coarse);
+    setCoarsePointer(coarse);
+    setReduceMotion(window.matchMedia("(prefers-reduced-motion: reduce)").matches);
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+
+    const world = createWorld(loadBest());
+    worldRef.current = world;
+    const sfx = new Sfx();
+    sfx.muted = world.meta.mute;
+    sfxRef.current = sfx;
+    world.lockShake = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    world.reduce = world.lockShake || !world.meta.shake;
+
+    const held = new Set<string>();
+    let override: string[] | null = null;
+    let bombLatch = false;
+    let mouseFire = false;
+    const pointer = { on: false, x: 0, y: 0, touch: false };
+    const layout = { dpr: 1 };
+
+    const resize = () => {
+      const parent = canvas.parentElement;
+      if (!parent) return;
+      const rect = parent.getBoundingClientRect();
+      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      const cssW = Math.max(1, rect.width);
+      const cssH = Math.max(1, rect.height);
+      fitWorld(world, cssW, cssH);
+      layout.dpr = dpr;
+      canvas.width = Math.max(1, Math.floor(cssW * dpr));
+      canvas.height = Math.max(1, Math.floor(cssH * dpr));
+      canvas.style.width = `${cssW}px`;
+      canvas.style.height = `${cssH}px`;
+    };
+    resize();
+    const ro = new ResizeObserver(resize);
+    if (canvas.parentElement) ro.observe(canvas.parentElement);
+
+    const toWorld = (clientX: number, clientY: number) => {
+      const rect = canvas.getBoundingClientRect();
+      return {
+        x: clientX - rect.left,
+        y: clientY - rect.top,
+      };
+    };
+
+    const effective = () => (override ? new Set(override) : held);
+
+    const readInput = (): InputState => {
+      const keys = effective();
+      const left = [...CODES_LEFT].some((c) => keys.has(c));
+      const right = [...CODES_RIGHT].some((c) => keys.has(c));
+      const up = [...CODES_UP].some((c) => keys.has(c));
+      const down = [...CODES_DOWN].some((c) => keys.has(c));
+      const focus = keys.has("ShiftLeft") || keys.has("ShiftRight");
+      const bomb = keys.has("Space") || keys.has("KeyX");
+      const edge = bomb && !bombLatch;
+      bombLatch = bomb;
+      const keying = left || right || up || down;
+      const keyFire = keys.has("KeyZ") || keys.has("KeyJ") || keys.has("ControlLeft") || keys.has("ControlRight");
+      return {
+        left,
+        right,
+        up,
+        down,
+        focus,
+        fire: mouseFire || touchFireRef.current || keyFire,
+        bomb: edge,
+        pointer: pointer.on && !keying && world.mode === "play" && world.player.alive ? { x: pointer.x, y: pointer.y - 78 } : null,
+      };
+    };
+
+    const sync = () => setUi(readUi(world, sfx.muted));
+
+    window.__controlsTest = {
+      getYaw: () => 0,
+      getSpeed: () => world.player.speedUp,
+      getX: () => world.player.x,
+      getY: () => world.player.y,
+      getMode: () => world.mode,
+      setKeys: (codes) => {
+        override = codes.length ? codes : null;
+        if (!codes.length) held.clear();
+        bombLatch = false;
+      },
+    };
+
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.repeat) {
+        held.add(e.code);
+        return;
+      }
+      held.add(e.code);
+      if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Space"].includes(e.code)) e.preventDefault();
+      if (e.code === "Enter") {
+        sfx.unlock();
+        if (world.mode === "menu") startOrResume(world);
+        else if (world.mode === "clear") nextLevel(world);
+        else if (world.mode === "over") retryLevel(world);
+        else if (world.mode === "pause") world.mode = "play";
+        else if (world.mode === "victory") world.mode = "menu";
+        sfx.drone(world.mode === "play");
+        sync();
+      }
+      if (e.code === "Escape" || e.code === "KeyP") {
+        if (world.mode === "play" && e.code === "KeyP") world.mode = "pause";
+        else if (world.mode === "play" && e.code === "Escape") world.mode = "pause";
+        else if (world.mode === "pause" && (e.code === "Escape" || e.code === "KeyP")) world.mode = "play";
+        else if (world.mode === "shop" || world.mode === "options") closeOverlay(world);
+        else if (world.mode === "standby") world.mode = "menu";
+        sfx.drone(world.mode === "play");
+        sync();
+      }
+      if (e.code === "KeyM") {
+        sfx.muted = !sfx.muted;
+        setMuted(world, sfx.muted);
+        sfx.drone(world.mode === "play");
+        sync();
+      }
+    };
+    const onKeyUp = (e: KeyboardEvent) => held.delete(e.code);
+    const clearHeld = () => held.clear();
+    const onVis = () => {
+      if (document.hidden) held.clear();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    window.addEventListener("keyup", onKeyUp);
+    window.addEventListener("blur", clearHeld);
+    document.addEventListener("visibilitychange", onVis);
+
+    const onPointerDown = (e: PointerEvent) => {
+      if ((e.target as HTMLElement | null)?.closest("button")) return;
+      sfx.unlock();
+      const pt = toWorld(e.clientX, e.clientY);
+      pointer.x = pt.x;
+      pointer.y = pt.y;
+      pointer.touch = e.pointerType === "touch";
+      pointer.on = pointer.touch;
+      mouseFire = !pointer.touch && e.button === 0;
+      canvas.setPointerCapture(e.pointerId);
+    };
+    const onPointerMove = (e: PointerEvent) => {
+      const pt = toWorld(e.clientX, e.clientY);
+      if (e.pointerType === "touch") {
+        if (!pointer.on) return;
+        pointer.x = pt.x;
+        pointer.y = pt.y;
+        return;
+      }
+      mouseFire = (e.buttons & 1) === 1;
+    };
+    const onPointerUp = (e: PointerEvent) => {
+      if (e.pointerType === "touch") pointer.on = false;
+      mouseFire = false;
+    };
+    const onPointerLeave = (e: PointerEvent) => {
+      if (e.pointerType === "touch") return;
+      mouseFire = false;
+    };
+    canvas.addEventListener("pointerdown", onPointerDown);
+    canvas.addEventListener("pointermove", onPointerMove);
+    canvas.addEventListener("pointerup", onPointerUp);
+    canvas.addEventListener("pointercancel", onPointerUp);
+    canvas.addEventListener("pointerleave", onPointerLeave);
+
+    let last = performance.now();
+    let acc = 0;
+    let hudAcc = 0;
+    let shotGate = 0;
+    let lastMode = world.mode;
+    let raf = 0;
+    const fixed = 1 / 60;
+
+    const frame = (now: number) => {
+      const delta = Math.min(0.05, (now - last) / 1000);
+      last = now;
+      acc += delta;
+      let steps = 0;
+      while (acc >= fixed && steps < 5) {
+        const input = readInput();
+        const shotBefore = world.player.fireCd;
+        step(world, fixed, input);
+        if (world.mode === "play" && world.player.alive && world.player.fireCd > shotBefore) shotGate = 1;
+        acc -= fixed;
+        steps += 1;
+      }
+      if (shotGate === 1) {
+        sfx.shot(world.player.weapon, world.player.feed > 0, world.player.x / WORLD_W * 2 - 1);
+        shotGate = 0;
+      }
+      let killed = false;
+      let big = false;
+      for (const cue of world.cues) {
+        if (cue === "kill") killed = true;
+        else if (cue === "big") big = true;
+        else if (cue === "hit") sfx.armor();
+        else if (cue === "graze") sfx.graze();
+        else if (cue === "pickup") sfx.pickup();
+        else if (cue === "hurt") sfx.hurt();
+        else if (cue === "shield") sfx.shield();
+        else if (cue === "bomb") sfx.bomb();
+        else if (cue === "wave") sfx.wave();
+        else if (cue === "boss") sfx.boss();
+        else if (cue === "clean") sfx.clean();
+        else if (cue === "drive") sfx.drive();
+      }
+      world.cues.length = 0;
+      if (big) sfx.kill(true);
+      else if (killed) sfx.kill(false);
+
+      const dpr = layout.dpr || Math.min(window.devicePixelRatio || 1, 2);
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.clearRect(0, 0, WORLD_W, WORLD_H);
+      ctx.beginPath();
+      ctx.rect(0, 0, WORLD_W, WORLD_H);
+      ctx.clip();
+      const keys = effective();
+      drawWorld(ctx, world, keys.has("ShiftLeft") || keys.has("ShiftRight"));
+
+      hudAcc += delta;
+      if (world.mode !== lastMode || hudAcc > 0.15) {
+        if (world.mode !== lastMode) sfx.drone(world.mode === "play");
+        lastMode = world.mode;
+        hudAcc = 0;
+        sync();
+      }
+      raf = requestAnimationFrame(frame);
+    };
+    raf = requestAnimationFrame(frame);
+    sync();
+
+    return () => {
+      cancelAnimationFrame(raf);
+      ro.disconnect();
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("keyup", onKeyUp);
+      window.removeEventListener("blur", clearHeld);
+      document.removeEventListener("visibilitychange", onVis);
+      canvas.removeEventListener("pointerdown", onPointerDown);
+      canvas.removeEventListener("pointermove", onPointerMove);
+      canvas.removeEventListener("pointerup", onPointerUp);
+      canvas.removeEventListener("pointercancel", onPointerUp);
+      canvas.removeEventListener("pointerleave", onPointerLeave);
+      sfx.drone(false);
+      delete window.__controlsTest;
+    };
+  }, []);
+
+  const act = (fn: (world: World) => void) => {
+    const world = worldRef.current;
+    const sfx = sfxRef.current;
+    if (!world || !sfx) return;
+    sfx.unlock();
+    fn(world);
+    sfx.drone(world.mode === "play");
+    setUi(readUi(world, sfx.muted));
+  };
+
+  const toast = (text: string) => {
+    setNotice(text);
+    window.setTimeout(() => setNotice(""), 1400);
+  };
+
+  const bomb = () => {
+    const world = worldRef.current;
+    sfxRef.current?.unlock();
+    if (world) requestBomb(world);
+  };
+
+  const money = ui.dollars.toLocaleString("pl-PL");
+
+  return (
+    <main className="fixed inset-0 select-none overflow-hidden bg-bg text-ink">
+      <canvas ref={canvasRef} className="absolute inset-0 z-0 h-full w-full touch-none" aria-label="Wingbreaker playfield" />
+
+      <div className="pointer-events-none absolute top-4 right-4 z-40 flex items-center gap-1.5 font-display text-xl text-ink">
+        <DollarSign className="h-5 w-5 text-ember" strokeWidth={2.25} aria-hidden />
+        <span>{money}</span>
+      </div>
+      {notice && (
+        <p className="pointer-events-none absolute top-12 right-4 z-40 font-display text-sm tracking-[0.16em] text-ember">{notice}</p>
+      )}
+
+      {ui.mode === "menu" && (
+        <div className="absolute inset-0 z-20 overflow-y-auto">
+          <div className="mx-auto flex min-h-full w-[min(92vw,420px)] flex-col justify-center gap-2 px-5 pt-20 pb-10">
+            <p className="font-display text-sm tracking-[0.42em] text-muted">VERTICAL SORTIE</p>
+            <h1 className="font-display pr-16 text-5xl font-semibold tracking-wide text-ink sm:text-6xl">WINGBREAKER</h1>
+            <div className="my-3 h-px w-16 bg-ember" />
+            <p className="text-sm text-muted">
+              Poziom {String(ui.mission).padStart(3, "0")} · {ui.nextChapter}
+              {ui.cleared ? " · warta złamana" : ""}
+            </p>
+            {ui.best > 0 && <p className="font-display text-lg text-cold">REKORD {String(ui.best).padStart(6, "0")}</p>}
+            <div className="mt-4 flex flex-col gap-2">
+              <button type="button" className={row} onClick={() => act((w) => startOrResume(w))}>
+                <span>START</span>
+                <span className="text-sm text-muted">{String(ui.mission).padStart(3, "0")}</span>
+              </button>
+              <button type="button" className={row} onClick={() => act((w) => openMode(w, "shop"))}>
+                <span>SKLEP</span>
+              </button>
+              <button type="button" className={row} onClick={() => { setArmReset(false); act((w) => openMode(w, "options")); }}>
+                <span>OPCJE</span>
+              </button>
+              <button type="button" className={row} disabled={!ui.hasSave} onClick={() => act((w) => resumeSaved(w))}>
+                <span>WCZYTAJ</span>
+              </button>
+              <button
+                type="button"
+                className={row}
+                onClick={() => act((w) => { saveNow(w); toast("ZAPISANO"); })}
+              >
+                <span>ZAPISZ</span>
+              </button>
+              <button type="button" className={row} onClick={() => act((w) => openMode(w, "standby"))}>
+                <span>WYJŚCIE</span>
+              </button>
+            </div>
+            <p className="mt-4 text-xs leading-relaxed text-muted">
+              {touch ? "Przeciągnij, żeby ruszyć. Osobny FIRE." : "Ruch · klik lub Z strzał · Shift skupienie · Spacja bomba · P pauza"}
+            </p>
+          </div>
+        </div>
+      )}
+
+      {ui.mode === "shop" && (
+        <div className="absolute inset-0 z-20 overflow-y-auto bg-bg/80">
+          <div className="mx-auto flex w-[min(92vw,480px)] flex-col gap-3 px-5 py-16">
+            <p className="font-display text-sm tracking-[0.28em] text-muted">HANGAR</p>
+            <h2 className="font-display text-4xl tracking-wide">SKLEP</h2>
+            <p className="text-sm text-muted">Ulepszenia wchodzą od następnego poziomu. Dolary zostają po śmierci.</p>
+            {UPGRADE_LIST.map((item) => {
+              const rank = ui.upgrades[item.id];
+              const maxed = rank >= item.max;
+              const price = item.prices[Math.min(rank, item.prices.length - 1)];
+              return (
+                <button
+                  key={item.id}
+                  type="button"
+                  className={row}
+                  disabled={maxed || ui.dollars < price}
+                  onClick={() => act((w) => purchaseUpgrade(w, item.id))}
+                >
+                  <span>
+                    <span className="block">{item.name}</span>
+                    <span className="block text-xs tracking-normal text-muted">{item.blurb}</span>
+                  </span>
+                  <span className="text-sm text-ember">{maxed ? "MAX" : `$${price}`}</span>
+                </button>
+              );
+            })}
+            <p className="mt-3 font-display text-sm tracking-[0.22em] text-muted">SKÓRKI</p>
+            <div className="grid grid-cols-2 gap-2">
+              {SKINS.map((skin) => {
+                const owned = ui.owned.includes(skin.id);
+                const worn = ui.skin === skin.id;
+                return (
+                  <button
+                    key={skin.id}
+                    type="button"
+                    className={`${row} h-14 ${worn ? "border-ember" : ""}`}
+                    disabled={!owned && ui.dollars < skin.price}
+                    onClick={() => act((w) => (owned ? wearSkin(w, skin.id) : purchaseSkin(w, skin.id)))}
+                  >
+                    <span className="flex items-center gap-2">
+                      <span className="inline-block h-3 w-3 border border-line" style={{ background: skin.hull }} />
+                      {skin.name}
+                    </span>
+                    <span className="text-sm text-ember">{worn ? "NA ŁOŻU" : owned ? "ZAŁÓŻ" : `$${skin.price}`}</span>
+                  </button>
+                );
+              })}
+            </div>
+            <button type="button" className={`${row} mt-2`} onClick={() => act((w) => closeOverlay(w))}>
+              <span>WRÓĆ</span>
+            </button>
+          </div>
+        </div>
+      )}
+
+      {ui.mode === "options" && (
+        <div className="absolute inset-0 z-20 overflow-y-auto bg-bg/80">
+          <div className="mx-auto flex min-h-full w-[min(92vw,420px)] flex-col justify-center gap-2 px-5 py-16">
+            <h2 className="mb-2 font-display text-4xl tracking-wide">OPCJE</h2>
+            <button
+              type="button"
+              className={row}
+              onClick={() =>
+                act((w) => {
+                  const sfx = sfxRef.current;
+                  if (!sfx) return;
+                  sfx.muted = !sfx.muted;
+                  setMuted(w, sfx.muted);
+                })
+              }
+            >
+              <span>DŹWIĘK</span>
+              <span className="text-sm text-muted">{ui.muted ? "WYŁ." : "WŁ."}</span>
+            </button>
+            <button type="button" className={row} disabled={ui.lockShake} onClick={() => act((w) => setShake(w, !w.meta.shake))}>
+              <span>WSTRZĄS</span>
+              <span className="text-sm text-muted">{ui.lockShake ? "SYSTEM" : ui.shake ? "WŁ." : "WYŁ."}</span>
+            </button>
+            <button
+              type="button"
+              className={row}
+              onClick={() => {
+                if (!armReset) {
+                  setArmReset(true);
+                  return;
+                }
+                setArmReset(false);
+                act((w) => newMission(w));
+              }}
+            >
+              <span>NOWA MISJA</span>
+              <span className="text-sm text-ember">{armReset ? "NA PEWNO" : "POZIOM 1"}</span>
+            </button>
+            <p className="text-xs text-muted">Nowa misja zeruje poziom i wynik. Dolary, skórki i ulepszenia zostają.</p>
+            <button type="button" className={`${row} mt-2`} onClick={() => act((w) => closeOverlay(w))}>
+              <span>WRÓĆ</span>
+            </button>
+          </div>
+        </div>
+      )}
+
+      {ui.mode === "standby" && (
+        <div className="absolute inset-0 z-20 flex items-center justify-center bg-bg/85">
+          <div className="w-[min(92vw,380px)] px-5 text-center">
+            <p className="font-display text-sm tracking-[0.28em] text-muted">ŁĄCZNOŚĆ</p>
+            <h2 className="font-display mt-2 text-4xl tracking-wide">PRZERWANA</h2>
+            <p className="mt-3 text-sm text-muted">Karta zostaje otwarta. Wróć, kiedy chcesz.</p>
+            <button type="button" className={`${row} mt-6`} onClick={() => act((w) => openMode(w, "menu"))}>
+              <span>POWRÓT</span>
+            </button>
+          </div>
+        </div>
+      )}
+
+      {ui.mode === "pause" && (
+        <div className="absolute inset-0 z-20 flex items-center justify-center bg-bg/55">
+          <div className="flex w-[min(92vw,320px)] flex-col gap-2 px-5">
+            <p className="text-center font-display text-4xl tracking-[0.2em]">PAUZA</p>
+            <p className="text-center font-display text-2xl text-muted">{String(ui.score).padStart(6, "0")}</p>
+            <button type="button" className={row} onClick={() => act((w) => openMode(w, "play"))}>
+              <span>WZNÓW</span>
+            </button>
+            <button type="button" className={row} onClick={() => act((w) => { saveNow(w); toast("ZAPISANO"); })}>
+              <span>ZAPISZ</span>
+            </button>
+            <button type="button" className={row} onClick={() => act((w) => openMode(w, "menu"))}>
+              <span>MENU</span>
+            </button>
+          </div>
+        </div>
+      )}
+
+      {ui.mode === "clear" && (
+        <div className="absolute inset-0 z-20 flex items-center justify-center bg-bg/55">
+          <div className="flex w-[min(92vw,380px)] flex-col gap-2 px-5">
+            <p className="font-display text-sm tracking-[0.28em] text-muted">POZIOM {String(ui.level).padStart(3, "0")}</p>
+            <h2 className="font-display text-4xl tracking-wide">{ui.perfect ? "CZYSTO" : "WYŁOM"}</h2>
+            <p className="text-sm text-muted">{ui.chapter}</p>
+            <p className="font-display text-2xl text-ember">+${ui.clearCash.toLocaleString("pl-PL")}</p>
+            <p className="text-sm text-muted">Dalej: {String(ui.mission).padStart(3, "0")} · {ui.nextChapter}</p>
+            <button type="button" className={row} onClick={() => act((w) => nextLevel(w))}>
+              <span>DALEJ</span>
+            </button>
+            <button type="button" className={row} onClick={() => act((w) => openMode(w, "shop"))}>
+              <span>SKLEP</span>
+            </button>
+            <button type="button" className={row} onClick={() => act((w) => openMode(w, "menu"))}>
+              <span>MENU</span>
+            </button>
+          </div>
+        </div>
+      )}
+
+      {ui.mode === "over" && (
+        <div className="absolute inset-0 z-20 flex items-center justify-center bg-bg/60">
+          <div className="flex w-[min(92vw,380px)] flex-col gap-2 px-5">
+            <p className="font-display text-sm tracking-[0.28em] text-muted">STRATA</p>
+            <p className="font-display text-5xl">{String(ui.score).padStart(6, "0")}</p>
+            <p className="text-sm text-muted">Poziom {String(ui.level).padStart(3, "0")} · {ui.chapter}</p>
+            <p className={`font-display text-lg ${ui.record ? "text-ember" : "text-cold"}`}>
+              {ui.record ? "NOWY REKORD" : `REKORD ${String(ui.best).padStart(6, "0")}`}
+            </p>
+            <p className="text-xs text-muted">Dolary zostają. Broń i życia wracają do zestawu z hangaru.</p>
+            <button type="button" className={row} onClick={() => act((w) => retryLevel(w))}>
+              <span>JESZCZE RAZ</span>
+            </button>
+            <button type="button" className={row} onClick={() => act((w) => openMode(w, "shop"))}>
+              <span>SKLEP</span>
+            </button>
+            <button type="button" className={row} onClick={() => act((w) => openMode(w, "menu"))}>
+              <span>MENU</span>
+            </button>
+          </div>
+        </div>
+      )}
+
+      {ui.mode === "victory" && (
+        <div className="absolute inset-0 z-20 flex items-center justify-center bg-bg/70">
+          <div className="flex w-[min(92vw,420px)] flex-col gap-2 px-5">
+            <p className="font-display text-sm tracking-[0.28em] text-muted">POZIOM 100</p>
+            <h2 className="font-display text-4xl tracking-wide">WARTA ZŁAMANA</h2>
+            <p className="font-display text-3xl">{String(ui.score).padStart(6, "0")}</p>
+            <p className="text-sm text-muted">Czarny Wartownik nie wraca. Hangar zostaje.</p>
+            <button type="button" className={row} onClick={() => act((w) => openMode(w, "menu"))}>
+              <span>MENU</span>
+            </button>
+            <button type="button" className={row} onClick={() => act((w) => newMission(w))}>
+              <span>NOWA MISJA</span>
+            </button>
+          </div>
+        </div>
+      )}
+
+      {touch && ui.mode === "play" && (
+        <button
+          type="button"
+          onPointerDown={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            touchFireRef.current = true;
+            sfxRef.current?.unlock();
+          }}
+          onPointerUp={() => {
+            touchFireRef.current = false;
+          }}
+          onPointerCancel={() => {
+            touchFireRef.current = false;
+          }}
+          className="absolute bottom-8 left-4 z-30 h-14 w-20 border border-line bg-bg/80 font-display text-sm tracking-wide text-ink"
+        >
+          FIRE
+        </button>
+      )}
+
+      {touch && ui.mode === "play" && (
+        <button
+          type="button"
+          onPointerDown={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            bomb();
+          }}
+          className="absolute right-4 bottom-8 z-30 h-14 w-14 border border-line bg-bg/80 font-display text-sm tracking-wide text-ink"
+        >
+          BOMB
+        </button>
+      )}
+    </main>
+  );
+}
