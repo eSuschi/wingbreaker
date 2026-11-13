@@ -1,5 +1,6 @@
 import {
   LEVELS,
+  FAUNA,
   bossHp,
   bulletScale,
   buySkin,
@@ -732,27 +733,27 @@ function spawnEnemy(w: World, kind: Kind, x: number, motion: Motion, drop?: Pick
   const level = Math.max(1, w.level);
   const ch = Math.min(9, Math.floor((level - 1) / 10));
   let hp = 1;
-  let r = 16;
+  let r = 12;
   let score = 80 + level;
   let vy = 72;
   if (kind === "drone") {
     hp = Math.min(5, 2 + Math.floor((level - 1) / 20));
-    r = 18;
+    r = 13;
     score = 140 + level * 2;
     vy = 78;
   } else if (kind === "wedge") {
     hp = Math.min(9, 3 + Math.floor((level - 1) / 11));
-    r = 22;
+    r = 14;
     score = 160 + level * 2;
     vy = 64;
   } else if (kind === "cruiser") {
     hp = Math.min(18, 5 + Math.floor((level - 1) / 7) + Math.floor(ch / 3));
-    r = 28;
+    r = 18;
     score = 320 + level * 3;
     vy = 42;
   } else if (kind === "boss") {
     hp = bossHp(level);
-    r = 48;
+    r = 32;
     score = 4000 + level * 40;
     vy = 46;
   }
@@ -782,7 +783,7 @@ function spawnEnemy(w: World, kind: Kind, x: number, motion: Motion, drop?: Pick
     look:
       kind === "boss"
         ? ch
-        : ((level - 1) % 10 + (Math.round((spin ?? 0) / 0.45) % 3) * 3) % 10,
+        : (ch * 5 + level + Math.round((spin ?? 0) * 3) + (kind === "cruiser" ? 3 : kind === "drone" ? 1 : 0)) % 36,
   });
 }
 
@@ -859,6 +860,7 @@ function killEnemy(w: World, e: Enemy) {
   else if (e.kind === "cruiser") w.hitstop = 0.028;
   w.cues.push(big ? "big" : "kill");
   addScore(w, e.score, e.x, e.y, big);
+  if (e.kind === "cruiser") float(w, e.x, e.y - 22, FAUNA[e.look % FAUNA.length].toUpperCase(), true);
   if (e.kind === "boss") {
     bossLoot(w, e);
     return;
@@ -898,7 +900,7 @@ function bossLoot(w: World, e: Enemy) {
       x: e.x,
       y: e.y + 8,
       vx: Math.cos(a) * 42,
-      vy: 62 + (i % 4) * 14,
+      vy: 48 + (i % 4) * 8,
       rest: 0,
     });
   });
@@ -938,7 +940,61 @@ function takePickup(w: World, kind: PickupKind, value: number, who: Player = w.p
 
 function dropPickup(w: World, kind: PickupKind, x: number, y: number, value = 0) {
   const dir = Math.sign(w.player.x - x) || (w.rng() < 0.5 ? -1 : 1);
-  w.pickups.push({ kind, x, y, vx: dir * 22, vy: 78, value, rest: 0 });
+  w.pickups.push({ kind, x, y, vx: dir * 18, vy: 42, value, rest: 0 });
+}
+
+function dropFloor() {
+  return WORLD_H - 100;
+}
+
+function stepPickups(w: World, dt: number) {
+  const crew = living(w);
+  const floorY = dropFloor();
+  const magnet = 1 + (w.meta.upgrades.magnet || 0);
+  for (const pk of w.pickups) {
+    if (pk.y > 9000) continue;
+    const prevY = pk.y;
+    if (!crew.length) {
+      pk.vy += 200 * dt;
+      pk.y += pk.vy * dt;
+      continue;
+    }
+    const who = nearestPilot(w, pk.x, pk.y);
+    const dx = who.x - pk.x;
+    const dy = who.y - pk.y;
+    const dist = Math.hypot(dx, dy) || 1;
+    const landed = pk.y >= floorY - 2;
+    if (!landed && dist < 180 + magnet * 30) {
+      pk.vx += (dx / dist) * (150 + magnet * 60) * dt;
+      pk.vy += (dy / dist) * (60 + magnet * 24) * dt;
+    }
+    if (landed && Math.abs(dx) < 340 + magnet * 80) {
+      pk.vx = Math.sign(dx || 1) * Math.min(180 + magnet * 30, Math.abs(dx) * 3.4);
+    }
+    pk.vy += (landed ? 20 : 100) * dt;
+    const sp = Math.hypot(pk.vx, pk.vy);
+    const cap = landed ? 200 : 140;
+    if (sp > cap) {
+      pk.vx = (pk.vx / sp) * cap;
+      pk.vy = (pk.vy / sp) * cap;
+    }
+    pk.x = clamp(pk.x + pk.vx * dt, 18, WORLD_W - 18);
+    const next = pk.y + pk.vy * dt;
+    if (next >= floorY && pk.vy > 0) {
+      pk.y = floorY;
+      pk.vy = 0;
+      pk.rest += dt;
+    } else {
+      pk.y = next;
+      if (pk.y < floorY - 4) pk.rest = 0;
+      else pk.rest += dt;
+    }
+    const crossed = prevY < who.y - 4 && pk.y >= who.y - 10 && Math.abs(pk.x - who.x) < 44 + magnet * 6;
+    if (crossed) {
+      pk.y = 9999;
+      takePickup(w, pk.kind, pk.value, who);
+    }
+  }
 }
 
 function hurtPlayer(w: World, p: Player = w.player) {
@@ -1318,16 +1374,16 @@ function moveEnemy(w: World, e: Enemy, dt: number) {
 }
 
 function edgeOf(kind: Kind) {
-  if (kind === "boss") return Math.min(120, Math.max(92, WORLD_W * 0.11));
-  if (kind === "cruiser") return Math.min(96, Math.max(70, WORLD_W * 0.08));
-  return Math.min(72, Math.max(52, WORLD_W * 0.062));
+  if (kind === "boss") return Math.min(96, Math.max(64, WORLD_W * 0.1));
+  if (kind === "cruiser") return Math.min(72, Math.max(44, WORLD_W * 0.07));
+  return Math.min(52, Math.max(28, WORLD_W * 0.05));
 }
 
 function bodyClearance(kind: Kind) {
-  if (kind === "boss") return 108;
-  if (kind === "cruiser") return 72;
-  if (kind === "wedge") return 54;
-  return 46;
+  if (kind === "boss") return 72;
+  if (kind === "cruiser") return 40;
+  if (kind === "wedge") return 30;
+  return 24;
 }
 
 function contain(e: Enemy) {
@@ -1467,42 +1523,7 @@ export function step(w: World, dt: number, input: InputState) {
     b.life -= dt;
   }
 
-  const crew = living(w);
-  if (crew.length) {
-    const floorY = WORLD_H - 32;
-    const reach = 70 + w.meta.upgrades.magnet * 36;
-    for (const pk of w.pickups) {
-      const landed = pk.y >= floorY - 0.5;
-      if (landed) {
-        const who = nearestPilot(w, pk.x, pk.y);
-        const dx = who.x - pk.x;
-        const adx = Math.abs(dx);
-        if (adx < reach && adx > 0.01) pk.vx += Math.sign(dx) * 420 * dt;
-      }
-      pk.vy += 170 * dt;
-      const sp = Math.hypot(pk.vx, pk.vy);
-      const cap = landed ? 360 : 220;
-      if (sp > cap) {
-        pk.vx = (pk.vx / sp) * cap;
-        pk.vy = (pk.vy / sp) * cap;
-      }
-      pk.x = clamp(pk.x + pk.vx * dt, 16, WORLD_W - 16);
-      if (pk.y + pk.vy * dt >= floorY) {
-        pk.y = floorY;
-        pk.vy = 0;
-        pk.vx *= 0.82;
-        pk.rest += dt;
-      } else {
-        pk.y += pk.vy * dt;
-        pk.rest = 0;
-      }
-    }
-  } else {
-    for (const pk of w.pickups) {
-      pk.vy += 170 * dt;
-      pk.y += pk.vy * dt;
-    }
-  }
+  stepPickups(w, dt);
 
   for (const b of w.bullets) {
     if (!b.friendly || b.life <= 0) continue;
@@ -1549,11 +1570,17 @@ export function step(w: World, dt: number, input: InputState) {
   }
 
   if (living(w).length) {
-    const floorY = WORLD_H - 32;
+    const floorY = dropFloor();
+    const magnet = 1 + (w.meta.upgrades.magnet || 0);
     for (const pk of w.pickups) {
-      if (pk.y < floorY - 0.5) continue;
+      if (pk.y > 9000) continue;
       const who = nearestPilot(w, pk.x, pk.y);
-      if (Math.hypot(pk.x - who.x, pk.y - who.y) < 28) {
+      const dx = pk.x - who.x;
+      const dy = pk.y - who.y;
+      const dist = Math.hypot(dx, dy);
+      const scoop = Math.abs(dx) < 50 + magnet * 8 && pk.y > who.y - 18 && pk.y < who.y + 70;
+      const floorScoop = pk.y >= floorY - 3 && Math.abs(dx) < 62 + magnet * 12 && who.y > floorY - 140;
+      if (dist < 36 + magnet * 4 || scoop || floorScoop) {
         pk.y = 9999;
         takePickup(w, pk.kind, pk.value, who);
       }
@@ -1568,8 +1595,8 @@ export function step(w: World, dt: number, input: InputState) {
   }
 
   if (w.mode === "play" && !w.bossUp && w.spawns.length === 0 && w.enemies.length === 0 && w.level > 0) {
-    const floorY = WORLD_H - 32;
-    const patience = Math.max(2.6, WORLD_W / 520);
+    const floorY = dropFloor();
+    const patience = 6.5;
     const hanging = w.pickups.some((pk) => pk.y < 9000 && (pk.y < floorY - 0.5 || pk.rest < patience));
     if (!w.clearing) {
       w.clearing = true;

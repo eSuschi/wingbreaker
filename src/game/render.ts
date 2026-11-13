@@ -13,7 +13,8 @@ const WING_SKIN: SkinDef = {
 };
 
 const plates: (HTMLImageElement | null)[] = Array.from({ length: 10 }, () => null);
-const faces: (HTMLImageElement | null)[] = Array.from({ length: 10 }, () => null);
+const faces: (HTMLImageElement | null)[] = Array.from({ length: 36 }, () => null);
+const bosses: (HTMLImageElement | null)[] = Array.from({ length: 10 }, () => null);
 
 function ready(img: HTMLImageElement | null) {
   return !!img && img.complete && img.naturalWidth > 2;
@@ -32,13 +33,31 @@ function chapterPlate(index: number) {
 
 function faceOf(look: number) {
   if (typeof Image === "undefined") return null;
-  const i = ((look % 10) + 10) % 10;
+  const i = ((look % 36) + 36) % 36;
   if (!faces[i]) {
     const img = new Image();
     img.src = `/critters/${i}.png`;
     faces[i] = img;
   }
   return ready(faces[i]) ? faces[i] : null;
+}
+
+function bossOf(chapter: number) {
+  if (typeof Image === "undefined") return null;
+  const i = ((chapter % 10) + 10) % 10;
+  if (!bosses[i]) {
+    const img = new Image();
+    img.src = `/bosses/${i}.png`;
+    bosses[i] = img;
+  }
+  return ready(bosses[i]) ? bosses[i] : null;
+}
+
+function blitSprite(ctx: CanvasRenderingContext2D, img: HTMLImageElement, height: number, bob: number) {
+  const aspect = img.width / Math.max(1, img.height);
+  const h = height;
+  const w = h * Math.min(1.35, Math.max(0.72, aspect));
+  ctx.drawImage(img, -w / 2, -h / 2 + bob, w, h);
 }
 
 function cover(ctx: CanvasRenderingContext2D, img: HTMLImageElement) {
@@ -182,7 +201,7 @@ function paintHangar(ctx: CanvasRenderingContext2D) {
   }
   ctx.fillStyle = "#07090c";
   ctx.fillRect(0, 0, WORLD_W, WORLD_H);
-  ctx.filter = "brightness(1.55) contrast(1.08)";
+  ctx.filter = "brightness(1.12) contrast(1.05)";
   ctx.drawImage(hangarImg, dx, dy, dw, dh);
   ctx.filter = "none";
   const veil = ctx.createLinearGradient(0, 0, 0, WORLD_H);
@@ -203,7 +222,7 @@ function drawBackdrop(ctx: CanvasRenderingContext2D, w: World) {
   const photo = chapterPlate(idx);
   if (photo) {
     cover(ctx, photo);
-    ctx.fillStyle = "rgba(5,8,12,0.22)";
+    ctx.fillStyle = "rgba(4,6,12,0.14)";
     ctx.fillRect(0, 0, WORLD_W, WORLD_H);
     return;
   }
@@ -465,16 +484,18 @@ function drawEnemy(ctx: CanvasRenderingContext2D, e: Enemy, time: number, px: nu
   ctx.save();
   ctx.translate(e.x, e.y);
   const pal = CHAPTERS[e.ch] ?? CHAPTERS[0];
+  const bob = Math.sin(time * 3.2 + e.spin) * 1.6;
   if (e.kind === "boss") {
-    const face = faceOf(e.ch);
-    if (face) ctx.drawImage(face, -78, -78, 156, 156);
+    const face = bossOf(e.ch);
+    if (face) blitSprite(ctx, face, 96, bob);
     else drawBossCreature(ctx, e.ch, time, e.flash > 0);
-    if (e.flash > 0) {
-      ctx.strokeStyle = "rgba(255,255,255,0.7)";
-      ctx.lineWidth = 3;
-      ctx.strokeRect(-70, -70, 140, 140);
+    if (e.flash > 0 && face) {
+      ctx.globalCompositeOperation = "source-atop";
+      ctx.fillStyle = "rgba(255,255,255,0.45)";
+      ctx.fillRect(-70, -70, 140, 140);
+      ctx.globalCompositeOperation = "source-over";
     }
-    bar(ctx, 78, -86, e.hp / e.max, pal.accent);
+    bar(ctx, 54, -56, e.hp / e.max, pal.accent);
     if (e.mark === 0 && e.fire < 0.28 && e.fire > 0 && e.y < py) {
       const a = Math.atan2(py - e.y, px - e.x);
       ctx.strokeStyle = pal.accent;
@@ -486,18 +507,16 @@ function drawEnemy(ctx: CanvasRenderingContext2D, e: Enemy, time: number, px: nu
     }
   } else {
     const face = faceOf(e.look);
-    if (face) {
-      const s = e.kind === "cruiser" ? 92 : e.kind === "wedge" ? 74 : 64;
-      ctx.drawImage(face, -s / 2, -s / 2, s, s);
-      if (e.flash > 0) {
-        ctx.strokeStyle = "rgba(255,255,255,0.85)";
-        ctx.lineWidth = 2;
-        ctx.strokeRect(-s / 2 + 4, -s / 2 + 4, s - 8, s - 8);
-      }
-    } else {
-      drawCritter(ctx, e.look, e.kind, time, e.spin, e.flash > 0);
+    const h = e.kind === "cruiser" ? 40 : e.kind === "wedge" ? 32 : e.kind === "drone" ? 28 : 26;
+    if (face) blitSprite(ctx, face, h, bob);
+    else drawCritter(ctx, e.look, e.kind, time, e.spin, e.flash > 0);
+    if (e.flash > 0 && face) {
+      ctx.globalCompositeOperation = "source-atop";
+      ctx.fillStyle = "rgba(255,255,255,0.5)";
+      ctx.fillRect(-40, -40, 80, 80);
+      ctx.globalCompositeOperation = "source-over";
     }
-    if (e.kind === "cruiser") bar(ctx, 40, 34, e.hp / e.max, pal.accent);
+    if (e.kind === "cruiser") bar(ctx, 22, h * 0.42, e.hp / e.max, pal.accent);
   }
   ctx.restore();
 }
