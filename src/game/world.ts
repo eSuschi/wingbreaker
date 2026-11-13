@@ -11,6 +11,7 @@ import {
   loadFile,
   loadoutOf,
   luckMul,
+  gunName,
   salvageMul,
   writeFile,
   type Campaign,
@@ -27,7 +28,7 @@ export type Kind = "dart" | "wedge" | "cruiser" | "drone" | "boss";
 export type PickupKind = "W" | "S" | "B" | "M" | "$";
 export type Mode = "menu" | "shop" | "options" | "standby" | "play" | "pause" | "over" | "clear" | "victory";
 export type Motion = "rank" | "sine" | "swoop" | "pincer" | "hold" | "boss";
-export type Cue = "kill" | "big" | "hit" | "graze" | "pickup" | "hurt" | "shield" | "bomb" | "wave" | "boss" | "clean" | "drive";
+export type Cue = "kill" | "big" | "hit" | "graze" | "pickup" | "hurt" | "shield" | "bomb" | "wave" | "boss" | "clean" | "drive" | "missile";
 
 export type Bullet = {
   x: number;
@@ -43,6 +44,9 @@ export type Bullet = {
   hot: boolean;
   tint: number;
   shape?: number;
+  style?: number;
+  pierce?: number;
+  splash?: number;
 };
 
 export type Enemy = {
@@ -101,6 +105,8 @@ export type Player = {
   speedUp: number;
   bank: number;
   muzzle: number;
+  missiles: number;
+  missileCd: number;
 };
 
 export type World = {
@@ -350,6 +356,8 @@ function freshPlayer(): Player {
     speedUp: 0,
     bank: 0,
     muzzle: 0,
+    missiles: 0,
+    missileCd: 0,
   };
 }
 
@@ -368,6 +376,7 @@ function liveSnap(w: World): RunSnap {
     score: w.score,
     feed: p.feed,
     coop: w.coop,
+    missiles: Math.max(p.missiles, w.wing?.missiles ?? 0),
   };
 }
 
@@ -488,6 +497,8 @@ function parkPlayer(w: World, snap: RunSnap | null) {
   p.bombs = snap?.bombs ?? kit.bombs;
   p.shield = snap?.shield ?? false;
   p.feed = snap?.feed ?? 0;
+  p.missiles = Math.max(kit.missiles, snap?.missiles ?? 0);
+  p.missileCd = 0.4;
   p.inv = 1.35;
   p.alive = true;
   p.fireCd = 0.2;
@@ -502,6 +513,8 @@ function parkPlayer(w: World, snap: RunSnap | null) {
     wing.lives = p.lives;
     wing.inv = 1.35;
     wing.fireCd = 0.2;
+    wing.missiles = p.missiles;
+    wing.missileCd = 0.55;
     wing.alive = true;
     p.x = WORLD_W * 0.38;
     wing.x = WORLD_W * 0.62;
@@ -571,6 +584,7 @@ export function nextLevel(w: World) {
     score: w.score,
     feed: w.player.feed,
     coop: w.coop,
+    missiles: Math.max(w.player.missiles, w.wing?.missiles ?? 0, kit.missiles),
   });
 }
 
@@ -870,11 +884,11 @@ function killEnemy(w: World, e: Enemy) {
   if (e.drop) {
     dropPickup(w, e.drop, e.x, e.y, e.dropValue);
   } else {
-    const base = e.kind === "cruiser" ? 0.22 : e.kind === "wedge" ? 0.12 : e.kind === "drone" ? 0.1 : 0.07;
-    const chance = Math.min(0.42, base * luckMul(w.meta.upgrades.luck));
+    const base = e.kind === "cruiser" ? 0.28 : e.kind === "wedge" ? 0.16 : e.kind === "drone" ? 0.13 : 0.11;
+    const chance = Math.min(0.48, base * luckMul(w.meta.upgrades.luck));
     if (w.rng() < chance) {
       const roll = w.rng();
-      const kind: PickupKind = roll < 0.42 ? "$" : roll < 0.58 ? "M" : roll < 0.74 ? "S" : roll < 0.88 ? "B" : "W";
+      const kind: PickupKind = roll < 0.34 ? "$" : roll < 0.56 ? "W" : roll < 0.72 ? "M" : roll < 0.86 ? "S" : "B";
       dropPickup(w, kind, e.x, e.y, kind === "$" ? 12 + w.level : 0);
     }
   }
@@ -913,7 +927,7 @@ function takePickup(w: World, kind: PickupKind, value: number, who: Player = w.p
     if (p.weapon < 6) {
       p.weapon += 1;
       w.cues.push("pickup");
-      float(w, p.x, p.y - 28, `GUN ${p.weapon}`, true);
+      float(w, p.x, p.y - 28, gunName(p.weapon), true);
     } else {
       p.feed = 6.5;
       w.cues.push("drive");
@@ -930,6 +944,10 @@ function takePickup(w: World, kind: PickupKind, value: number, who: Player = w.p
     float(w, p.x, p.y - 28, "BOMB", true);
   } else if (kind === "$") {
     bank(w, value || 12, p.x, p.y, true);
+  } else if (kind === "M") {
+    p.missiles = Math.min(9, p.missiles + 3);
+    w.cues.push("pickup");
+    float(w, p.x, p.y - 28, "MISSILES", true);
   } else {
     w.chain = Math.min(40, w.chain + 8);
     w.chainT = 2.1;
@@ -1015,7 +1033,7 @@ function hurtPlayer(w: World, p: Player = w.player) {
   if (p.weapon > 1) {
     p.weapon -= 1;
     p.feed = 0;
-    float(w, p.x, p.y - 46, `GUN ${p.weapon}`);
+    float(w, p.x, p.y - 46, gunName(p.weapon));
   }
   w.flash = 0.22;
   addTrauma(w, 0.66);
@@ -1036,43 +1054,112 @@ function hurtPlayer(w: World, p: Player = w.player) {
   }
 }
 
-function firePlayer(w: World, p: Player = w.player) {
+function firePlayer(w: World, p: Player, focus: boolean) {
   const feed = p.feed > 0;
-  const lvl = p.weapon;
-  const side = lvl >= 3 ? 34 : 12;
-  const shots: { ox: number; vx: number; vy: number; homing?: boolean; r?: number; dmg?: number }[] = [];
-  shots.push({ ox: 0, vx: 0, vy: -740 });
-  if (lvl >= 2) {
-    shots.push({ ox: -8, vx: -side, vy: -720 });
-    shots.push({ ox: 8, vx: side, vy: -720 });
+  const lvl = Math.max(1, Math.min(6, p.weapon));
+  const tight = focus ? 0.32 : 1;
+  const shots: {
+    ox: number;
+    oy?: number;
+    vx: number;
+    vy: number;
+    r?: number;
+    dmg?: number;
+    style?: number;
+    pierce?: number;
+    splash?: number;
+    life?: number;
+  }[] = [];
+  if (lvl === 1) {
+    shots.push({ ox: 0, vx: 0, vy: -780, style: 0, dmg: 1, r: 2.3 });
+  } else if (lvl === 2) {
+    const spread = 18 * tight;
+    shots.push({ ox: -10, vx: -spread, vy: -760, style: 0, dmg: 1, r: 2.2 });
+    shots.push({ ox: 10, vx: spread, vy: -760, style: 0, dmg: 1, r: 2.2 });
+  } else if (lvl === 3) {
+    const spread = 42 * tight;
+    shots.push({ ox: 0, vx: 0, vy: -800, style: 0, dmg: 1, r: 2.3 });
+    shots.push({ ox: -13, vx: -spread, vy: -740, style: 0, dmg: 1, r: 2.15 });
+    shots.push({ ox: 13, vx: spread, vy: -740, style: 0, dmg: 1, r: 2.15 });
+  } else if (lvl === 4) {
+    const angles = focus ? [-0.14, -0.07, 0, 0.07, 0.14] : [-0.46, -0.22, 0, 0.22, 0.46];
+    for (const a of angles) {
+      const sp = 690;
+      shots.push({ ox: Math.sin(a) * 6, vx: Math.sin(a) * sp, vy: -Math.cos(a) * sp, style: 1, dmg: 0.7, r: 2.05 });
+    }
+  } else if (lvl === 5) {
+    shots.push({ ox: -14, vx: -10, vy: -420, style: 2, dmg: 2.35, r: 5.5, splash: 28, life: 1.85 });
+    shots.push({ ox: 14, vx: 10, vy: -420, style: 2, dmg: 2.35, r: 5.5, splash: 28, life: 1.85 });
+    shots.push({ ox: 0, vx: 0, vy: -820, style: 0, dmg: 0.5, r: 1.7 });
+  } else {
+    shots.push({ ox: 0, vx: 0, vy: -1120, style: 3, dmg: 1.5, r: 3.3, pierce: 6, life: 0.9 });
+    const spread = 24 * tight;
+    shots.push({ ox: -15, vx: -spread, vy: -760, style: 0, dmg: 0.65, r: 1.9 });
+    shots.push({ ox: 15, vx: spread, vy: -760, style: 0, dmg: 0.65, r: 1.9 });
   }
-  if (lvl >= 4) shots.push({ ox: 0, vx: 0, vy: -840, r: 3.1, dmg: 1.45 });
-  if (lvl >= 5) shots.push({ ox: 0, vx: 0, vy: -480, homing: true, r: 3 });
-  if (lvl >= 6) {
-    shots.push({ ox: -16, vx: -58, vy: -680 });
-    shots.push({ ox: 16, vx: 58, vy: -680 });
+  for (const pod of podOffsets(w.time, lvl)) {
+    shots.push({ ox: pod.x, oy: pod.y, vx: 0, vy: -640, style: 0, dmg: 0.42, r: 1.65 });
   }
+  const kick = feed ? 1.18 : 1;
   for (const s of shots) {
-    if (w.bullets.length > 180) break;
+    if (w.bullets.length > 200) break;
     w.bullets.push({
       x: p.x + s.ox,
-      y: p.y - 20,
+      y: p.y - 18 + (s.oy ?? 0),
       vx: s.vx,
       vy: s.vy,
-      r: s.r ?? 2.1,
+      r: s.r ?? 2.2,
       friendly: true,
-      dmg: s.dmg ?? 1,
-      life: 1.4,
-      homing: !!s.homing,
+      dmg: (s.dmg ?? 1) * kick,
+      life: s.life ?? 1.35,
+      homing: false,
       grazed: false,
       hot: feed,
       tint: 0,
+      style: s.style ?? 0,
+      pierce: s.pierce ?? 0,
+      splash: s.splash ?? 0,
     });
   }
-  p.muzzle = 0.045;
+  p.muzzle = 0.05;
   const trig = 1 - w.meta.upgrades.trigger * 0.1;
-  const base = (0.128 - Math.min(lvl, 6) * 0.007) * trig;
-  p.fireCd = Math.max(0.06, feed ? base * 0.72 : base);
+  const bases = [0, 0.128, 0.122, 0.114, 0.126, 0.17, 0.09];
+  p.fireCd = Math.max(0.052, (bases[lvl] ?? 0.12) * trig * (feed ? 0.7 : 1));
+}
+
+function tryMissile(w: World, p: Player, fire: boolean, dt: number) {
+  p.missileCd = Math.max(0, p.missileCd - dt);
+  if (!fire || !p.alive || p.missiles <= 0 || p.missileCd > 0) return;
+  if (w.bullets.length > 200) return;
+  p.missiles -= 1;
+  p.missileCd = 0.46;
+  const side = p.missiles % 2 === 0 ? 1 : -1;
+  w.bullets.push({
+    x: p.x + side * 12,
+    y: p.y - 6,
+    vx: side * 70,
+    vy: -240,
+    r: 3.6,
+    friendly: true,
+    dmg: 3.4,
+    life: 2.6,
+    homing: true,
+    grazed: false,
+    hot: true,
+    tint: 0,
+    style: 4,
+    pierce: 0,
+    splash: 18,
+  });
+  w.cues.push("missile");
+}
+
+export function podOffsets(time: number, weapon: number) {
+  if (weapon < 4) return [] as { x: number; y: number }[];
+  const a = time * 2.5;
+  const pods = [{ x: Math.cos(a) * 28, y: Math.sin(a) * 11 }];
+  if (weapon >= 6) pods.push({ x: Math.cos(a + Math.PI) * 28, y: Math.sin(a + Math.PI) * 11 });
+  return pods;
 }
 
 function nearestPilot(w: World, x: number, y: number): Player {
@@ -1111,15 +1198,16 @@ function enemyShoot(w: World, e: Enemy): number {
   if (!target.alive || e.y > target.y - 8) return 0.6;
   const aim = Math.atan2(target.y - e.y, target.x - e.x);
   const scale = bulletScale(lv);
-  const shape = boss ? (lv >= 60 ? 3 : lv >= 30 ? 4 : 0) : e.kind === "cruiser" && lv >= 40 ? 3 : (e.look + e.ch) % 4;
-  const push = (a: number, speed: number, r = 4.4) => {
+  const shape = boss ? 3 : [0, 1, 2, 4][(e.look + e.ch) % 4];
+  const push = (a: number, speed: number, r = 6.2) => {
     if (w.bullets.length > 220) return;
+    const rad = Math.max(6, r);
     w.bullets.push({
       x: e.x + Math.cos(a) * 6,
       y: e.y + 12,
       vx: Math.cos(a) * speed * scale,
       vy: Math.sin(a) * speed * scale,
-      r,
+      r: rad,
       friendly: false,
       dmg: 1,
       life: 5.5,
@@ -1444,7 +1532,8 @@ function drivePilot(
   p.y = clamp(p.y, laneTop(), WORLD_H - 36);
   p.bank += (bankTarget - p.bank) * (1 - Math.exp(-12 * dt));
   p.fireCd -= dt;
-  if (fire && p.fireCd <= 0) firePlayer(w, p);
+  if (fire && p.fireCd <= 0) firePlayer(w, p, focus);
+  tryMissile(w, p, fire, dt);
 }
 
 export function step(w: World, dt: number, input: InputState) {
@@ -1532,7 +1621,18 @@ export function step(w: World, dt: number, input: InputState) {
       if (Math.hypot(b.x - e.x, b.y - e.y) < e.r + b.r) {
         e.hp -= b.dmg;
         e.flash = 0.07;
-        b.life = 0;
+        if ((b.splash ?? 0) > 0) {
+          for (const other of w.enemies) {
+            if (other === e || other.hp <= 0) continue;
+            if (Math.hypot(b.x - other.x, b.y - other.y) < (b.splash ?? 0) + other.r * 0.45) other.hp -= b.dmg * 0.4;
+          }
+          ring(w, b.x, b.y, b.style === 2 ? "#b6e36a" : "#e07a3d", 0.18, 8, 1.2);
+        }
+        const left = b.pierce ?? 0;
+        if (left > 0) {
+          b.pierce = left - 1;
+          b.y -= e.r + b.r + 3;
+        } else b.life = 0;
         burst(w, b.x, b.y, b.hot ? "#e07a3d" : "#d6eef8", 3, 70, false);
         if (e.kind === "boss" || e.kind === "cruiser") w.cues.push("hit");
         break;
@@ -1641,6 +1741,7 @@ function finishLevel(w: World) {
       score: w.score,
       feed: w.player.feed,
       coop: w.coop,
+      missiles: Math.max(w.player.missiles, w.wing?.missiles ?? 0, kit.missiles),
     });
   }
 }

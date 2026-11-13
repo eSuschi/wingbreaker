@@ -70,12 +70,32 @@ export class Sfx {
 
   shot(level: number, hot: boolean, pan = 0) {
     const now = performance.now();
-    if (now - this.lastShot < 52) return;
+    if (now - this.lastShot < 48) return;
     this.lastShot = now;
     const jitter = 1 + (Math.random() - 0.5) * 0.08;
+    if (level >= 6) {
+      this.tone(920 * jitter, 0.045, "sawtooth", hot ? 0.016 : 0.011, 380, pan);
+      this.tone(240, 0.04, "square", 0.008, -30, pan);
+      return;
+    }
+    if (level === 5) {
+      this.tone((hot ? 210 : 168) * jitter, 0.08, "sine", 0.028, -70, pan);
+      this.tone(90, 0.06, "triangle", 0.016, -20, pan);
+      return;
+    }
+    if (level === 4) {
+      this.noise(0.035, hot ? 0.04 : 0.028, 2000);
+      this.tone(540 * jitter, 0.04, "square", 0.01, -200, pan);
+      return;
+    }
     const freq = (hot ? 640 : 470 + level * 28) * jitter;
     this.tone(freq, 0.04, "square", hot ? 0.02 : 0.014, hot ? -360 : -240, pan);
     this.tone(160 + level * 8, 0.03, "triangle", 0.012, -30, pan);
+  }
+
+  missile() {
+    this.tone(260, 0.11, "sawtooth", 0.028, 240);
+    this.noise(0.07, 0.035, 640);
   }
 
   kill(big: boolean) {

@@ -577,14 +577,27 @@ function bomb(ctx: Pen) {
 }
 
 function chain(ctx: Pen, time: number) {
-  ctx.strokeStyle = "#e7c07a";
-  ctx.lineWidth = 2;
+  ctx.save();
+  ctx.rotate(-0.7);
+  ctx.fillStyle = "#e07a3d";
+  ctx.globalAlpha = 0.55 + Math.sin(time * 14) * 0.45;
   ctx.beginPath();
-  ctx.ellipse(-3, 0, 4, 6, time, 0, Math.PI * 2);
-  ctx.stroke();
+  ctx.moveTo(-2, 5);
+  ctx.lineTo(2.4, 11);
+  ctx.lineTo(-2.4, 11);
+  ctx.closePath();
+  ctx.fill();
+  ctx.globalAlpha = 1;
+  ctx.fillStyle = "#e7edf2";
   ctx.beginPath();
-  ctx.ellipse(3, 0, 4, 6, -time, 0, Math.PI * 2);
-  ctx.stroke();
+  ctx.moveTo(0, -11);
+  ctx.lineTo(3.4, 5);
+  ctx.lineTo(-3.4, 5);
+  ctx.closePath();
+  ctx.fill();
+  ctx.fillStyle = "#c44536";
+  ctx.fillRect(-2.6, 1.5, 5.2, 2);
+  ctx.restore();
 }
 
 function coin(ctx: Pen, time: number) {

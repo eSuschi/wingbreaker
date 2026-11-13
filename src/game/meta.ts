@@ -3,7 +3,7 @@ export const SAVE_KEY = "wingbreaker.save.v2";
 const LEGACY_BEST = "wingbreaker.best.v1";
 
 export type SkinId = "steel" | "ember" | "navy" | "graphite" | "bone";
-export type UpgradeId = "hull" | "magazine" | "capacitor" | "magnet" | "salvage" | "trigger" | "wings" | "luck";
+export type UpgradeId = "hull" | "magazine" | "capacitor" | "magnet" | "salvage" | "trigger" | "wings" | "luck" | "salvo";
 
 export type Upgrades = Record<UpgradeId, number>;
 
@@ -28,6 +28,7 @@ export type RunSnap = {
   score: number;
   feed: number;
   coop?: boolean;
+  missiles?: number;
 };
 
 export type SaveFile = {
@@ -85,6 +86,7 @@ export const UPGRADE_LIST: { id: UpgradeId; name: string; blurb: string; max: nu
   { id: "magnet", name: "Magnet", blurb: "Gifts drift toward your ship.", max: 2, prices: [160, 400] },
   { id: "salvage", name: "Scrap", blurb: "+15% cash per rank.", max: 3, prices: [160, 380, 720] },
   { id: "magazine", name: "Locker", blurb: "+1 bomb at the start of a level.", max: 2, prices: [300, 680] },
+  { id: "salvo", name: "Salvo", blurb: "Start each level with homing missiles.", max: 2, prices: [260, 640] },
   { id: "hull", name: "Hull", blurb: "+1 life at the start of a level.", max: 2, prices: [400, 920] },
 ];
 
@@ -162,7 +164,7 @@ export function freshCampaign(): Campaign {
     cleared: false,
     skin: "steel",
     owned: ["steel"],
-    upgrades: { hull: 0, magazine: 0, capacitor: 0, magnet: 0, salvage: 0, trigger: 0, wings: 0, luck: 0 },
+    upgrades: { hull: 0, magazine: 0, capacitor: 0, magnet: 0, salvage: 0, trigger: 0, wings: 0, luck: 0, salvo: 0 },
     mute: false,
     shake: true,
   };
@@ -235,6 +237,7 @@ function sanitize(raw: Partial<Campaign> | null | undefined, legacyBest: number)
       trigger: clampInt(up.trigger, 0, 2, 0),
       wings: clampInt(up.wings, 0, 2, 0),
       luck: clampInt(up.luck, 0, 2, 0),
+      salvo: clampInt(up.salvo, 0, 2, 0),
     },
     mute: Boolean(raw.mute),
     shake: raw.shake !== false,
@@ -252,6 +255,7 @@ function sanitizeRun(raw: RunSnap | null | undefined): RunSnap | null {
     score: clampInt(raw.score, 0, 99_999_999, 0),
     feed: Math.max(0, Math.min(12, Number(raw.feed) || 0)),
     coop: Boolean(raw.coop),
+    missiles: clampInt(raw.missiles, 0, 9, 0),
   };
 }
 
@@ -327,5 +331,12 @@ export function loadoutOf(c: Campaign) {
     lives: 3 + c.upgrades.hull,
     bombs: 2 + c.upgrades.magazine,
     weapon: Math.min(5, 1 + cap + wings),
+    missiles: Math.min(6, (c.upgrades.salvo || 0) * 2),
   };
+}
+
+export const GUNS = ["PULSE", "TWIN", "TRIO", "FAN", "NEUTRON", "LANCE"] as const;
+
+export function gunName(level: number) {
+  return GUNS[Math.max(0, Math.min(GUNS.length - 1, Math.round(level) - 1))] ?? "PULSE";
 }

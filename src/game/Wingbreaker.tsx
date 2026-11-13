@@ -93,6 +93,11 @@ type Probe = {
   getY: () => number;
   setKeys: (codes: string[]) => void;
   getMode: () => string;
+  setGun?: (n: number) => void;
+  getGun?: () => number;
+  armMissiles?: (n: number) => void;
+  setLevel?: (n: number) => void;
+  shotReport?: () => { n: number; styles: number[] };
 };
 
 declare global {
@@ -117,12 +122,12 @@ export function Wingbreaker() {
     record: false,
     perfect: true,
     clearCash: 0,
-    chapter: "Rust Harbor",
-    nextChapter: "Rust Harbor",
+    chapter: "Rust Nebula",
+    nextChapter: "Rust Nebula",
     hasSave: false,
     skin: "steel",
     owned: ["steel"],
-    upgrades: { hull: 0, magazine: 0, capacitor: 0, magnet: 0, salvage: 0, trigger: 0, wings: 0, luck: 0 },
+    upgrades: { hull: 0, magazine: 0, capacitor: 0, magnet: 0, salvage: 0, trigger: 0, wings: 0, luck: 0, salvo: 0 },
     cleared: false,
     lockShake: false,
     quip: quipFor(1),
@@ -243,6 +248,21 @@ export function Wingbreaker() {
       getX: () => world.player.x,
       getY: () => world.player.y,
       getMode: () => world.mode,
+      setGun: (n: number) => {
+        world.player.weapon = Math.max(1, Math.min(6, n));
+      },
+      getGun: () => world.player.weapon,
+      armMissiles: (n: number) => {
+        world.player.missiles = n;
+        world.player.missileCd = 0;
+      },
+      setLevel: (n: number) => {
+        world.level = n;
+      },
+      shotReport: () => ({
+        n: world.bullets.filter((b) => b.friendly).length,
+        styles: world.bullets.filter((b) => b.friendly).map((b) => b.style ?? 0),
+      }),
       setKeys: (codes) => {
         override = codes.length ? codes : null;
         if (!codes.length) held.clear();
@@ -386,6 +406,7 @@ export function Wingbreaker() {
         else if (cue === "boss") sfx.boss();
         else if (cue === "clean") sfx.clean();
         else if (cue === "drive") sfx.drive();
+        else if (cue === "missile") sfx.missile();
       }
       world.cues.length = 0;
       if (big) sfx.kill(true);
@@ -568,6 +589,7 @@ export function Wingbreaker() {
               );
             })}
             <p className="mt-3 font-display text-sm tracking-[0.22em] text-muted">SKINS</p>
+            <p className="text-xs text-muted">Each skin is a different hull, not a paint job.</p>
             <div className="grid grid-cols-2 gap-2">
               {SKINS.map((skin) => {
                 const owned = ui.owned.includes(skin.id);
