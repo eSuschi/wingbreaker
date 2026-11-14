@@ -30,6 +30,7 @@ import {
   startArcade,
   setMusic,
   setSfx,
+  setCrew,
   purchaseGun,
   step,
   fitWorld,
@@ -82,6 +83,7 @@ type Ui = {
   dailyPlayed: boolean;
   coop: boolean;
   tally: [number, number];
+  crew: "solo" | "coop";
 };
 
 function readUi(world: World, muted: boolean): Ui {
@@ -123,6 +125,7 @@ function readUi(world: World, muted: boolean): Ui {
     dailyPlayed: world.meta.dailyDay === daySeed().key && world.meta.dailyScore > 0,
     coop: world.coop && !world.arcade,
     tally: [world.tally[0], world.tally[1]],
+    crew: world.meta.crew === "coop" ? "coop" : "solo",
   };
 }
 
@@ -201,6 +204,7 @@ export function Wingbreaker() {
     dailyPlayed: false,
     coop: false,
     tally: [0, 0],
+    crew: "solo",
   });
   const [touch, setTouch] = useState(false);
   const [notice, setNotice] = useState("");
@@ -744,81 +748,135 @@ export function Wingbreaker() {
 
       {ui.mode === "menu" && (
         <div className="absolute inset-0 z-20 overflow-y-auto">
-          <div className="mx-auto flex w-[min(92vw,420px)] flex-col gap-2 px-5 pt-16 pb-16">
-            <p className="font-display text-sm tracking-[0.42em] text-muted">VERTICAL SORTIE</p>
-            <h1 className="font-display text-[2.6rem] leading-none font-semibold tracking-wide text-ink sm:pr-16 sm:text-6xl">WINGBREAKER</h1>
-            <div className="my-3 h-px w-16 bg-ember" />
-            <p className="text-sm text-muted">
-              Level {String(ui.mission).padStart(3, "0")} · {ui.nextChapter}
-              {ui.cleared ? " · watch broken" : ""}
+          <div className="pointer-events-none absolute inset-y-0 left-0 hidden w-[min(62vw,800px)] bg-gradient-to-r from-bg/90 via-bg/55 to-transparent lg:block" />
+          <div className="menu-rise relative mx-auto flex min-h-full w-[min(92vw,440px)] flex-col justify-center gap-3 py-10 lg:mx-0 lg:ml-[7vw]">
+            <header>
+              <p className="font-display text-xs tracking-[0.5em] text-ember">VERTICAL SORTIE</p>
+              <h1 className="logo w-max max-w-none font-display text-[clamp(2.2rem,11vw,2.9rem)] leading-[0.95] font-bold tracking-wide whitespace-nowrap lg:text-7xl">WINGBREAKER</h1>
+              <p className="mt-2 text-sm text-muted">Too many critters. Too many guns. A worrying amount of poop.</p>
+            </header>
+
+            <p className="flex flex-wrap gap-x-4 gap-y-1 font-display text-sm tracking-[0.16em] text-muted">
+              <span>
+                LEVEL <span className="text-ink">{String(ui.mission).padStart(3, "0")}</span>/100
+              </span>
+              <span>
+                <span className="text-ember">★</span> <span className="text-ink">{ui.stars}</span>
+              </span>
+              {ui.best > 0 && (
+                <span>
+                  BEST <span className="text-ink">{ui.best.toLocaleString("en-US")}</span>
+                </span>
+              )}
+              {ui.cleared && <span className="text-ember">WATCH BROKEN</span>}
             </p>
-            {ui.best > 0 && <p className="font-display text-lg text-cold">BEST {String(ui.best).padStart(6, "0")}</p>}
-            <p className="font-display text-sm tracking-[0.18em] text-ember">{ui.stars} ★</p>
-            <div className="mt-4 flex flex-col gap-2">
+
+            <div className="flex flex-col gap-2">
               <button
                 type="button"
-                className={row}
-                onClick={() => (touch ? act((w) => chooseCrew(w, "solo")) : setPick(true))}
+                className="btn-sheen relative flex h-16 w-full items-center justify-between overflow-hidden border border-ember bg-ember px-5 text-left font-display text-2xl font-semibold tracking-[0.16em] text-bg shadow-[0_0_30px_rgba(224,122,61,0.35)] hover:brightness-110"
+                onClick={() => act((w) => chooseCrew(w, touch ? "solo" : ui.crew))}
               >
-                <span>{ui.hasSave ? "CONTINUE" : "CAMPAIGN"}</span>
-                <span className="text-sm text-muted">
-                  {String(ui.mission).padStart(3, "0")} · {ui.nextChapter}
+                <span>{ui.hasSave ? "CONTINUE" : "NEW GAME"}</span>
+                <span className="text-right text-xs leading-tight font-medium tracking-[0.14em]">
+                  <span className="block">LEVEL {String(ui.hasSave ? ui.mission : 1).padStart(3, "0")}</span>
+                  <span className="block opacity-80">{(ui.hasSave ? ui.nextChapter : "Rust Nebula").toUpperCase()}</span>
                 </span>
               </button>
-              {!touch && (
-                <button type="button" className="self-start text-xs tracking-[0.16em] text-muted underline" onClick={() => setPick(true)}>
-                  change
+              {ui.hasSave && (
+                <button
+                  type="button"
+                  className="flex h-14 w-full items-center justify-between border border-ink/40 bg-bg/70 px-5 text-left font-display text-xl tracking-[0.16em] text-ink backdrop-blur-sm hover:border-ember hover:text-ember"
+                  onClick={() => setPick(true)}
+                >
+                  <span>NEW GAME</span>
+                  <span className="text-xs tracking-[0.14em] text-muted">FROM LEVEL 001</span>
                 </button>
               )}
-              <button type="button" className={row} onClick={() => act((w) => openMode(w, "levels"))}>
-                <span>LEVELS</span>
-                <span className="text-sm text-muted">STARS</span>
-              </button>
-              <button type="button" className={row} onClick={() => act((w) => startArcade(w, false))}>
-                <span>ARCADE</span>
-                <span className="text-sm text-muted">30 STAGES</span>
-              </button>
-              <button type="button" className={row} onClick={() => act((w) => startArcade(w, true))}>
-                <span>DAILY SORTIE</span>
-                <span className="text-xs text-muted sm:text-sm">{ui.dailyPlayed ? "TRAINING" : "ONE OFFICIAL"}</span>
-              </button>
-              <button type="button" className={row} onClick={() => act((w) => openMode(w, "ranks"))}>
-                <span>RANKS</span>
-              </button>
-              <button type="button" className={row} onClick={() => act((w) => openMode(w, "shop"))}>
-                <span>SHOP</span>
-              </button>
-              <button type="button" className={row} onClick={() => { setArmReset(false); setCapture(null); act((w) => openMode(w, "options")); }}>
-                <span>OPTIONS</span>
-              </button>
             </div>
-            <p className="mt-4 text-xs leading-relaxed text-muted">{tip}</p>
-            <p className="text-xs leading-relaxed text-muted">
-              {touch ? "Drag to move. AUTO fires unless you turn it off." : "Move · click or Z to shoot · Shift focus · Space bomb · P pause · F auto fire"}
-            </p>
+
+            {!touch && (
+              <div>
+                <div className="grid grid-cols-2 gap-2">
+                  {(["solo", "coop"] as const).map((crew) => (
+                    <button
+                      key={crew}
+                      type="button"
+                      aria-pressed={ui.crew === crew}
+                      className={`flex h-11 items-center justify-center border font-display text-base tracking-[0.16em] backdrop-blur-sm ${ui.crew === crew ? "border-ember bg-ember/15 text-ember" : "border-line bg-bg/70 text-muted hover:border-ink/50 hover:text-ink"}`}
+                      onClick={() => act((w) => setCrew(w, crew))}
+                    >
+                      {crew === "solo" ? "1 PILOT" : "2 PILOTS"}
+                    </button>
+                  ))}
+                </div>
+                <p className="mt-1.5 text-xs leading-relaxed text-muted">
+                  {ui.crew === "coop"
+                    ? "Pilot: WASD, Z fires, Space bombs. Wingman: arrows, K fires, L bombs. Or plug in gamepads. Revive a downed partner by flying over the wreck."
+                    : "Move · click or Z to shoot · Shift focus · Space bomb · P pause · F auto fire. A gamepad works too."}
+                </p>
+              </div>
+            )}
+
+            <div className="grid grid-cols-2 gap-2">
+              {(
+                [
+                  ["ARCADE", "30 stages, no continues", () => act((w) => startArcade(w, false))],
+                  ["DAILY", ui.dailyPlayed ? "Training run" : "One official run a day", () => act((w) => startArcade(w, true))],
+                  ["LEVELS", `${ui.stars} of 300 stars`, () => act((w) => openMode(w, "levels"))],
+                  ["SHOP", `$${money} to spend`, () => act((w) => openMode(w, "shop"))],
+                  ["RANKS", "Arcade top ten", () => act((w) => openMode(w, "ranks"))],
+                  [
+                    "OPTIONS",
+                    "Sound, keys, field guide",
+                    () => {
+                      setArmReset(false);
+                      setCapture(null);
+                      act((w) => openMode(w, "options"));
+                    },
+                  ],
+                ] as const
+              ).map(([title, sub, go]) => (
+                <button
+                  key={title}
+                  type="button"
+                  className="flex h-16 flex-col justify-center border border-line bg-bg/70 px-4 text-left backdrop-blur-sm hover:border-ember"
+                  onClick={go}
+                >
+                  <span className="font-display text-lg leading-tight tracking-[0.14em] text-ink">{title}</span>
+                  <span className="text-xs leading-tight text-muted">{sub}</span>
+                </button>
+              ))}
+            </div>
+
+            <p className="text-xs leading-relaxed text-muted">{tip}</p>
           </div>
         </div>
       )}
 
       {pick && ui.mode === "menu" && (
-        <div className="absolute inset-0 z-30 flex items-center justify-center bg-bg/70">
+        <div className="absolute inset-0 z-30 flex items-center justify-center bg-bg/80 backdrop-blur-sm">
           <div className="flex w-[min(92vw,420px)] flex-col gap-2 px-5">
-            <p className="font-display text-sm tracking-[0.28em] text-muted">SORTIE</p>
-            <h2 className="font-display text-4xl tracking-wide">WHO IS FLYING</h2>
-            <p className="text-sm text-muted">One keyboard. Two chairs if you are brave.</p>
-            <button type="button" className={row} onClick={() => act((w) => { setPick(false); chooseCrew(w, "solo"); })}>
-              <span>SOLO</span>
-              <span className="text-sm text-muted">WASD</span>
-            </button>
-            <button type="button" className={row} onClick={() => act((w) => { setPick(false); chooseCrew(w, "coop"); })}>
-              <span>TWO PILOTS</span>
-              <span className="text-sm text-muted">ARROWS</span>
-            </button>
-            <p className="text-xs leading-relaxed text-muted">
-              Pilot shoots with Z, bombs with Space. Wingman shoots with K, bombs with L. Change any of that in Options. Gamepads work too: one pad flies the wingman, two pads fly both. Fly over a downed partner to bring them back, and fly wing to wing for a damage bonus.
+            <p className="font-display text-sm tracking-[0.28em] text-muted">NEW GAME</p>
+            <h2 className="font-display text-4xl tracking-wide">START FROM LEVEL 1?</h2>
+            <p className="text-sm text-muted">
+              You are on level {String(ui.mission).padStart(3, "0")}. A new game goes back to the first level. Your cash, upgrades, skins and stars stay.
             </p>
-            <button type="button" className={`${row} mt-1`} onClick={() => setPick(false)}>
-              <span>BACK</span>
+            <button
+              type="button"
+              className="flex h-14 w-full items-center justify-between border border-ember bg-ember px-5 font-display text-xl font-semibold tracking-[0.16em] text-bg hover:brightness-110"
+              onClick={() =>
+                act((w) => {
+                  setPick(false);
+                  newMission(w);
+                  chooseCrew(w, touch ? "solo" : ui.crew);
+                })
+              }
+            >
+              <span>START NEW GAME</span>
+            </button>
+            <button type="button" className={row} onClick={() => setPick(false)}>
+              <span>CANCEL</span>
             </button>
           </div>
         </div>

@@ -751,6 +751,12 @@ export function chooseCrew(w: World, crew: "solo" | "coop") {
   else startSolo(w);
 }
 
+/** Remembers whether one or two pilots fly; the menu's CONTINUE and NEW GAME use it. */
+export function setCrew(w: World, crew: "solo" | "coop") {
+  w.meta.crew = crew;
+  persist(w, w.snap);
+}
+
 export function resumeSaved(w: World) {
   if (!w.snap) return false;
   startSortie(w, w.snap);
