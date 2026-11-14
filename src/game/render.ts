@@ -375,12 +375,14 @@ function drawHud(ctx: CanvasRenderingContext2D, w: World) {
     ctx.fillStyle = i < w.player.weapon ? (w.player.feed > 0 ? EMBER : gunColor) : "#1a2128";
     ctx.fillRect(bx + i * seg + 1, by, seg - 3, 3);
   }
-  ctx.textAlign = "right";
-  ctx.fillStyle = EMBER;
-  ctx.font = "600 12px Barlow Condensed, sans-serif";
   const lift = w.touch ? 78 : 0;
-  ctx.fillText(`SNACK ${Math.floor(w.snacks)}`, WORLD_W - 16, by - 16 - lift);
-  ctx.textAlign = "left";
+  // bomb charge: fills with every kill, a full bar hands over a bomb
+  const chargeW = 53;
+  const chargeX = WORLD_W - 16 - chargeW;
+  ctx.fillStyle = "#1a2128";
+  ctx.fillRect(chargeX, by - 9 - lift, chargeW, 3);
+  ctx.fillStyle = EMBER;
+  ctx.fillRect(chargeX, by - 9 - lift, chargeW * Math.min(1, w.snacks / 100), 3);
 
   if (w.wing) {
     const y2 = by - 8;
@@ -1015,24 +1017,6 @@ function drawPoop(ctx: CanvasRenderingContext2D, shape: number, s: number, tint:
 function drawPickup(ctx: CanvasRenderingContext2D, kind: string, x: number, y: number, time: number, hue = 0) {
   ctx.save();
   ctx.translate(x, y);
-  if (kind === "N") {
-    // snack: a small glazed donut, no ring, so it never competes with real gifts
-    ctx.rotate(Math.sin(time * 3 + x) * 0.3);
-    ctx.fillStyle = "#c98a4b";
-    ctx.beginPath();
-    ctx.arc(0, 0, 6.5, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.fillStyle = "#f29bb8";
-    ctx.beginPath();
-    ctx.arc(0, -0.6, 5.4, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.fillStyle = "#1a120e";
-    ctx.beginPath();
-    ctx.arc(0, 0, 2, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.restore();
-    return;
-  }
   const small = WORLD_W < 560;
   const gift = hue === 1 ? "#9ed24a" : hue === 2 ? "#e07a3d" : "#7eb6d6";
   const tone = kind === "W" ? gift : kind === "S" ? "#bfe3f5" : kind === "B" ? "#9ed24a" : kind === "D" ? "#f2d24a" : kind === "M" ? "#ff8f6b" : "#e2b84a";

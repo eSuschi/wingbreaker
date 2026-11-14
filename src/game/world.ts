@@ -56,7 +56,7 @@ export let WORLD_H = 720;
 export let VIEW = 1;
 
 export type Kind = "dart" | "wedge" | "cruiser" | "drone" | "boss";
-export type PickupKind = "W" | "S" | "B" | "M" | "$" | "N" | "D";
+export type PickupKind = "W" | "S" | "B" | "M" | "$" | "D";
 export type Mode = "menu" | "shop" | "options" | "standby" | "play" | "pause" | "over" | "clear" | "victory" | "bridge" | "levels" | "guide" | "ranks" | "arcadeover";
 export type Motion = "rank" | "sine" | "swoop" | "pincer" | "hold" | "boss" | "spiral" | "zigzag" | "conga" | "rain" | "dive";
 export type Cue = "kill" | "big" | "hit" | "graze" | "pickup" | "hurt" | "shield" | "bomb" | "wave" | "boss" | "clean" | "drive" | "missile" | "plink";
@@ -602,7 +602,7 @@ export function setAutoFire(w: World, on: boolean) {
 }
 
 export function setAutoNext(w: World, on: boolean) {
-  w.meta.autoNext = on;
+  w.meta.autoAdvance = on;
   persist(w, w.snap);
 }
 
@@ -821,7 +821,20 @@ export function practiceLevel(w: World, n: number) {
   }
 }
 
+/** Leaves a replayed level and returns to the level map, with the campaign frontier restored. */
+export function backToLevels(w: World) {
+  if (w.pinned != null) w.meta.level = w.pinned;
+  w.pinned = null;
+  w.mode = "levels";
+  persist(w, w.snap);
+}
+
 export function leaveRun(w: World) {
+  if (w.arcade && w.purse > 0 && w.mode !== "arcadeover") {
+    // quitting an arcade run between stages still pays out what was banked
+    w.meta.dollars += Math.round(w.purse);
+    w.purse = 0;
+  }
   w.arcade = false;
   w.daily = false;
   w.pinned = null;
@@ -1126,8 +1139,7 @@ function killEnemy(w: World, e: Enemy) {
   const body = enemyBody(e.kind, w.level);
   bank(w, e.role === "bonus" ? 1 : body.cash, e.x, e.y, e.kind === "cruiser");
   w.slain += 1;
-  const snacks = e.kind === "cruiser" ? 5 : w.rng() < 0.35 ? 1 : 0;
-  for (let i = 0; i < snacks; i++) dropPickup(w, "N", e.x + (i - 1) * 6, e.y, 1);
+  chargeBomb(w, e.kind === "cruiser" ? 5 : 0.35);
   if (!w.duck && w.rng() < 0.03) {
     w.duck = true;
     dropPickup(w, "D", e.x, e.y, 0);
@@ -1145,9 +1157,10 @@ function killEnemy(w: World, e: Enemy) {
     // late formations are three times the size, so each enemy drops less often
     const thin = 1 - 0.5 * Math.min(1, (w.level - 1) / 99);
     const chance = Math.min(0.48, base * thin * luckMul(w.arcade ? 0 : w.meta.upgrades.luck));
-    if (w.rng() < chance) {
+    // never more than a few gifts in the air: the screen belongs to the poop
+    if (w.rng() < chance && w.pickups.length < 3) {
       const roll = w.rng();
-      const kind: PickupKind = roll < 0.34 ? "$" : roll < 0.56 ? "W" : roll < 0.72 ? "M" : roll < 0.86 ? "S" : "B";
+      const kind: PickupKind = roll < 0.36 ? "W" : roll < 0.56 ? "M" : roll < 0.74 ? "S" : roll < 0.88 ? "B" : "$";
       dropPickup(w, kind, e.x, e.y, kind === "$" ? 5 + Math.floor(w.level * 0.3) : 0);
     }
   }
@@ -1178,6 +1191,29 @@ function bossLoot(w: World, e: Enemy) {
     });
   });
   float(w, e.x, e.y - 36, "LOOT", true);
+}
+
+/**
+ * Every kill charges the next bomb; a full charge (100) hands one over. This
+ * replaced the snack pickups, which buried the screen in small falling things.
+ */
+function chargeBomb(w: World, amount: number) {
+  const boost = w.arcade ? 1 : w.meta.upgrades.pockets >= 2 ? 1.5 : w.meta.upgrades.pockets === 1 ? 1.25 : 1;
+  w.snacks += amount * boost;
+  while (w.snacks >= 100) {
+    w.snacks -= 100;
+    const p = w.player.alive ? w.player : (w.wing ?? w.player);
+    if (w.player.bombs >= 5) {
+      w.score += 2000;
+      float(w, p.x, p.y - 28, "+2,000", true);
+    } else {
+      w.player.bombs += 1;
+      if (w.wing) w.wing.bombs = w.player.bombs;
+      float(w, p.x, p.y - 28, "BOMB READY +1", true);
+      cheer(w, p.x, p.y, "#e07a3d");
+      w.cues.push("pickup");
+    }
+  }
 }
 
 function takePickup(w: World, kind: PickupKind, value: number, who: Player = w.player) {
@@ -1217,21 +1253,6 @@ function takePickup(w: World, kind: PickupKind, value: number, who: Player = w.p
     w.cues.push("pickup");
     float(w, p.x, p.y - 28, "PLUNGERS ×3", true);
     cheer(w, p.x, p.y, "#e07a3d");
-  } else if (kind === "N") {
-    const mul = w.arcade ? 1 : w.meta.upgrades.pockets >= 2 ? 1.5 : w.meta.upgrades.pockets === 1 ? 1.25 : 1;
-    w.snacks += mul;
-    w.score += 1;
-    while (w.snacks >= 100) {
-      w.snacks -= 100;
-      if (w.player.bombs >= 5) {
-        w.score += 2000;
-        float(w, p.x, p.y - 28, "+2,000", true);
-      } else {
-        w.player.bombs += 1;
-        if (w.wing) w.wing.bombs = w.player.bombs;
-        float(w, p.x, p.y - 28, "SNACK ATTACK! +1 BOMB", true);
-      }
-    }
   } else if (kind === "D") {
     w.freeze = w.bossUp ? 1.5 : 3;
     w.cues.push("pickup");
@@ -1287,7 +1308,6 @@ function stepPickups(w: World, dt: number) {
         pk.value = pk.hue;
       }
     }
-    if (pk.kind === "N") pk.vy = Math.max(pk.vy, 130);
     if (dist < 170 + magnet * 55) {
       pk.vx += (dx / dist) * (80 + magnet * 80) * dt;
       pk.vy += (dy / dist) * (60 + magnet * 46) * dt;
@@ -1594,7 +1614,6 @@ function cashBullets(w: World) {
     if (b.friendly || b.life <= 0) continue;
     b.life = 0;
     w.score += 5;
-    if (w.rng() < 0.1) dropPickup(w, "$", b.x, b.y, 1);
   }
 }
 
@@ -2319,13 +2338,17 @@ function finishLevel(w: World) {
       w.pinned = frontier;
       return;
     }
-    w.mode = "bridge";
-    w.bridgeT = 1.4;
+    if (w.meta.autoAdvance) {
+      w.mode = "bridge";
+      w.bridgeT = 1.4;
+    } else w.mode = "clear";
     return;
   }
   if (w.pinned != null) {
-    w.mode = "bridge";
-    w.bridgeT = 2.5;
+    if (w.meta.autoAdvance) {
+      w.mode = "bridge";
+      w.bridgeT = 2.5;
+    } else w.mode = "clear";
     w.meta.level = w.pinned;
     persist(w, w.snap);
     return;
@@ -2339,7 +2362,7 @@ function finishLevel(w: World) {
     const kit = loadoutOf(w.meta);
     w.meta.level = w.level + 1;
     const chapterEnd = isBossLevel(w.level);
-    if (chapterEnd || w.meta.autoNext === false) w.mode = "clear";
+    if (chapterEnd || !w.meta.autoAdvance) w.mode = "clear";
     else {
       w.mode = "bridge";
       w.bridgeT = 2.5;

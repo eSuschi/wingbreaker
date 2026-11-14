@@ -41,6 +41,7 @@ import {
   practiceLevel,
   stampRank,
   leaveRun,
+  backToLevels,
   type InputState,
   type Mode,
   type World,
@@ -84,6 +85,11 @@ type Ui = {
   coop: boolean;
   tally: [number, number];
   crew: "solo" | "coop";
+  noBomb: boolean;
+  slain: number;
+  born: number;
+  arcade: boolean;
+  replay: boolean;
 };
 
 function readUi(world: World, muted: boolean): Ui {
@@ -110,7 +116,7 @@ function readUi(world: World, muted: boolean): Ui {
     lockShake: world.lockShake,
     quip: quipFor(world.level),
     autoFire: world.meta.autoFire === true,
-    autoNext: world.meta.autoNext !== false,
+    autoNext: world.meta.autoAdvance === true,
     stars: starTotal(world.meta),
     music: world.meta.music,
     sfx: world.meta.sfx,
@@ -126,6 +132,11 @@ function readUi(world: World, muted: boolean): Ui {
     coop: world.coop && !world.arcade,
     tally: [world.tally[0], world.tally[1]],
     crew: world.meta.crew === "coop" ? "coop" : "solo",
+    noBomb: world.bombsUsed === 0,
+    slain: world.slain,
+    born: world.born,
+    arcade: world.arcade,
+    replay: world.pinned != null && !world.arcade,
   };
 }
 
@@ -189,7 +200,7 @@ export function Wingbreaker() {
     lockShake: false,
     quip: quipFor(1),
     autoFire: false,
-    autoNext: true,
+    autoNext: false,
     stars: 0,
     music: 55,
     sfx: 80,
@@ -205,6 +216,11 @@ export function Wingbreaker() {
     coop: false,
     tally: [0, 0],
     crew: "solo",
+    noBomb: true,
+    slain: 0,
+    born: 0,
+    arcade: false,
+    replay: false,
   });
   const [touch, setTouch] = useState(false);
   const [notice, setNotice] = useState("");
@@ -598,6 +614,7 @@ export function Wingbreaker() {
     let shotGate = 0;
     let plinkN = 0;
     let lastMode = world.mode;
+    let modeSince = performance.now();
     let raf = 0;
     const fixed = 1 / 60;
 
@@ -614,7 +631,7 @@ export function Wingbreaker() {
       if (padPause && (world.mode === "play" || world.mode === "pause")) {
         world.mode = world.mode === "play" ? "pause" : "play";
         sync();
-      } else if (padConfirm && world.mode !== "play" && world.mode !== "pause" && world.mode !== "bridge") confirm();
+      } else if (padConfirm && world.mode !== "play" && world.mode !== "pause" && world.mode !== "bridge" && now - modeSince > 700) confirm();
       padPause = false;
       padConfirm = false;
       while (acc >= fixed && steps < 5) {
@@ -688,7 +705,10 @@ export function Wingbreaker() {
           setNotice("SAVED");
           window.setTimeout(() => setNotice(""), 1000);
         }
-        if (world.mode !== lastMode) sfx.drone(world.mode === "play");
+        if (world.mode !== lastMode) {
+          sfx.drone(world.mode === "play");
+          modeSince = now;
+        }
         lastMode = world.mode;
         hudAcc = 0;
         sync();
@@ -982,7 +1002,7 @@ export function Wingbreaker() {
               <span>AUTO FIRE</span>
               <span className="text-sm text-muted">{ui.autoFire ? "ON" : "OFF"}</span>
             </button>
-            <button type="button" className={row} onClick={() => act((w) => setAutoNext(w, !w.meta.autoNext))}>
+            <button type="button" className={row} onClick={() => act((w) => setAutoNext(w, !w.meta.autoAdvance))}>
               <span>AUTO NEXT</span>
               <span className="text-sm text-muted">{ui.autoNext ? "ON" : "OFF"}</span>
             </button>
@@ -1106,26 +1126,63 @@ export function Wingbreaker() {
       )}
 
       {ui.mode === "clear" && (
-        <div className="absolute inset-0 z-20 flex items-center justify-center bg-bg/55">
-          <div className="flex w-[min(92vw,380px)] flex-col gap-2 px-5">
-            <p className="font-display text-sm tracking-[0.28em] text-muted">LEVEL {String(ui.level).padStart(3, "0")}</p>
-            <h2 className="font-display text-4xl tracking-wide">
-              {ui.level % 10 === 0 ? "CHAPTER CLEAR" : ui.perfect ? "CLEAN" : "BREACH"}
+        <div className="absolute inset-0 z-20 flex items-center justify-center bg-bg/60 backdrop-blur-[2px]">
+          <div className="menu-rise flex w-[min(92vw,400px)] flex-col gap-2 border border-line bg-bg/85 px-5 py-5">
+            <p className="font-display text-xs tracking-[0.32em] text-muted">
+              {ui.arcade ? `ARCADE · STAGE ${ui.arcadeStage}/30` : `${ui.chapter.toUpperCase()} · LEVEL ${String(ui.level).padStart(3, "0")}`}
+            </p>
+            <h2 className="font-display text-4xl leading-none font-semibold tracking-wide">
+              {!ui.arcade && ui.level % 10 === 0 ? "CHAPTER CLEAR" : ui.perfect && ui.slain >= ui.born ? "CLEAN SWEEP" : "LEVEL CLEAR"}
             </h2>
-            <p className="text-sm text-muted">{ui.chapter}</p>
-            <p className="text-sm italic text-cold">{ui.quip}</p>
-            <p className="font-display text-2xl text-ember">+${ui.clearCash.toLocaleString("en-US")} {ui.starLine}</p>
+            {!ui.arcade && (
+              <p className="stars font-display text-4xl leading-none text-ember" aria-label={`${(ui.starLine.match(/★/g) ?? []).length} of 3 stars`}>
+                {(ui.starLine || "★☆☆").split("").map((ch, i) => (
+                  <span key={i} className={ch === "★" ? "" : "opacity-25"} style={{ animationDelay: `${0.25 + i * 0.18}s` }}>
+                    ★
+                  </span>
+                ))}
+              </p>
+            )}
+            <dl className="mt-1 grid grid-cols-[1fr_auto] gap-x-4 gap-y-1 text-sm">
+              <dt className="text-muted">{ui.arcade ? "Banked for the hangar" : ui.replay ? "Cash (replays pay half)" : "Cash"}</dt>
+              <dd className="text-right font-display text-lg leading-none text-ember">+${ui.clearCash.toLocaleString("en-US")}</dd>
+              <dt className="text-muted">Shot down</dt>
+              <dd className="text-right font-display text-lg leading-none">
+                {ui.slain}/{ui.born}
+              </dd>
+              <dt className="text-muted">No hits taken</dt>
+              <dd className={`text-right font-display text-lg leading-none ${ui.perfect ? "text-cold" : "text-muted"}`}>{ui.perfect ? "YES" : "NO"}</dd>
+              <dt className="text-muted">No bombs used</dt>
+              <dd className={`text-right font-display text-lg leading-none ${ui.noBomb ? "text-cold" : "text-muted"}`}>{ui.noBomb ? "YES" : "NO"}</dd>
+            </dl>
             {ui.coop && <p className="font-display text-sm tracking-[0.12em] text-cold">{crewLine(ui.tally)}</p>}
-            <p className="text-sm text-muted">Next: {String(ui.mission).padStart(3, "0")} · {ui.nextChapter}</p>
-            <button type="button" className={row} onClick={() => act((w) => nextLevel(w))}>
-              <span>{ui.level % 10 === 0 ? "NEXT CHAPTER" : "NEXT"}</span>
+            <p className="text-sm italic text-cold">{ui.quip}</p>
+            <button
+              type="button"
+              className="btn-sheen relative mt-1 flex h-14 w-full items-center justify-between overflow-hidden border border-ember bg-ember px-5 text-left font-display text-xl font-semibold tracking-[0.16em] text-bg hover:brightness-110"
+              onClick={() => act((w) => nextLevel(w))}
+            >
+              <span>{ui.arcade ? "NEXT STAGE" : ui.level % 10 === 0 ? "NEXT CHAPTER" : "NEXT LEVEL"}</span>
+              <span className="text-xs font-medium tracking-[0.14em]">
+                {touch ? "" : "ENTER"}
+              </span>
             </button>
-            <button type="button" className={row} onClick={() => act((w) => openMode(w, "shop"))}>
-              <span>SHOP</span>
-            </button>
-            <button type="button" className={row} onClick={() => act((w) => openMode(w, "menu"))}>
-              <span>MENU</span>
-            </button>
+            <div className="grid grid-cols-2 gap-2">
+              {ui.arcade ? (
+                <button type="button" className={`${row} col-span-2`} onClick={() => act((w) => leaveRun(w))}>
+                  <span>QUIT ARCADE</span>
+                </button>
+              ) : (
+                <>
+                  <button type="button" className={row} onClick={() => act((w) => openMode(w, "shop"))}>
+                    <span>SHOP</span>
+                  </button>
+                  <button type="button" className={row} onClick={() => act((w) => (ui.replay ? backToLevels(w) : leaveRun(w)))}>
+                    <span>{ui.replay ? "LEVELS" : "MENU"}</span>
+                  </button>
+                </>
+              )}
+            </div>
           </div>
         </div>
       )}

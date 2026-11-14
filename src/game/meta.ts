@@ -20,7 +20,8 @@ export type Campaign = {
   upgrades: Upgrades;
   mute: boolean;
   shake: boolean;
-  autoNext: boolean;
+  /** true: the next level starts by itself. Off by default: the player presses NEXT. */
+  autoAdvance: boolean;
   autoFire: boolean | null;
   crew: "solo" | "coop";
   music: number;
@@ -117,7 +118,7 @@ export const UPGRADE_LIST: { id: UpgradeId; name: string; blurb: string; max: nu
   { id: "salvo", name: "Salvo", blurb: "Start each level with homing missiles.", max: 2, prices: [260, 640] },
   { id: "hull", name: "Hull", blurb: "+1 life at the start of a level.", max: 2, prices: [400, 920] },
   { id: "insurance", name: "Insurance", blurb: "First hit each level keeps your gun rank.", max: 1, prices: [1200] },
-  { id: "pockets", name: "Bigger Pockets", blurb: "Snacks count for more.", max: 2, prices: [500, 1100] },
+  { id: "pockets", name: "Quick Charge", blurb: "Kills charge your next bomb faster.", max: 2, prices: [500, 1100] },
 ];
 
 export const QUIPS = [
@@ -233,7 +234,7 @@ export function freshCampaign(): Campaign {
     upgrades: { hull: 0, magazine: 0, capacitor: 0, magnet: 0, salvage: 0, trigger: 0, wings: 0, luck: 0, salvo: 0, insurance: 0, pockets: 0 },
     mute: false,
     shake: true,
-    autoNext: true,
+    autoAdvance: false,
     autoFire: null,
     crew: "solo",
     music: 55,
@@ -322,7 +323,7 @@ function sanitize(raw: Partial<Campaign> | null | undefined, legacyBest: number)
     },
     mute: Boolean(raw.mute),
     shake: raw.shake !== false,
-    autoNext: raw.autoNext !== false,
+    autoAdvance: raw.autoAdvance === true,
     autoFire: typeof raw.autoFire === "boolean" ? raw.autoFire : null,
     crew: raw.crew === "coop" ? "coop" : "solo",
     music: clampInt(raw.music, 0, 100, 55),

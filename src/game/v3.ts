@@ -496,7 +496,7 @@ export const TIPS = [
   "Tip: Shift shows your real hitbox. You're smaller than you look.",
   "Tip: Grazing a golden nugget pays. Getting hit by one does not.",
   "Tip: The gift box changes color while it falls. Wait for yours.",
-  "Tip: 100 snacks make a bomb. Science is weird.",
+  "Tip: Every kill charges your next bomb. Watch the bar by the bomb boxes.",
   "Tip: Fart clouds don't hurt. They just push. Like your aunt.",
   "Tip: Not using bombs pays extra. Being brave has a price tag.",
   "Tip: LANCE goes through armor. Forge Bots hate that.",
