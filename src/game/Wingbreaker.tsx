@@ -80,6 +80,8 @@ type Ui = {
   guns: GunFamily[];
   arcadeStage: number;
   dailyPlayed: boolean;
+  coop: boolean;
+  tally: [number, number];
 };
 
 function readUi(world: World, muted: boolean): Ui {
@@ -119,7 +121,19 @@ function readUi(world: World, muted: boolean): Ui {
     guns: world.meta.guns.slice(),
     arcadeStage: world.arcadeStage,
     dailyPlayed: world.meta.dailyDay === daySeed().key && world.meta.dailyScore > 0,
+    coop: world.coop && !world.arcade,
+    tally: [world.tally[0], world.tally[1]],
   };
+}
+
+/** One line for the end-of-level bar when two pilots fly: who shot more, and a nudge for the other. */
+function crewLine(tally: [number, number]) {
+  const [a, b] = tally;
+  if (a === b) return `PILOT ${a} · WING ${b} · DEAD EVEN`;
+  const lead = a > b ? "PILOT" : "WING";
+  const gap = Math.abs(a - b);
+  const note = gap >= 12 ? "CARRYING THE TEAM" : gap >= 5 ? "TOP GUN" : "BY A NOSE";
+  return `PILOT ${a} · WING ${b} · ${lead} ${note}`;
 }
 
 const row =
@@ -137,6 +151,7 @@ type Probe = {
   armMissiles?: (n: number) => void;
   setLevel?: (n: number) => void;
   shotReport?: () => { n: number; styles: number[] };
+  getWorld?: () => World;
 };
 
 declare global {
@@ -184,6 +199,8 @@ export function Wingbreaker() {
     guns: ["pulse"],
     arcadeStage: 0,
     dailyPlayed: false,
+    coop: false,
+    tally: [0, 0],
   });
   const [touch, setTouch] = useState(false);
   const [notice, setNotice] = useState("");
@@ -270,6 +287,47 @@ export function Wingbreaker() {
 
     const effective = () => (override ? new Set(override) : held);
 
+    // Gamepads: one pad flies the pilot when alone and the wingman when two
+    // fly (so keyboard + pad works); with two pads each pilot gets one.
+    type PadState = { left: boolean; right: boolean; up: boolean; down: boolean; fire: boolean; focus: boolean; bomb: boolean; start: boolean };
+    const idle: PadState = { left: false, right: false, up: false, down: false, fire: false, focus: false, bomb: false, start: false };
+    const padLatch = [
+      { bomb: false, start: false, fire: false },
+      { bomb: false, start: false, fire: false },
+    ];
+    let padConfirm = false;
+    let padPause = false;
+    const readPad = (slot: number): PadState => {
+      const all = typeof navigator !== "undefined" && navigator.getGamepads ? Array.from(navigator.getGamepads()) : [];
+      const pads = all.filter((g): g is Gamepad => !!g && g.connected);
+      const pad = pads[slot];
+      if (!pad) return idle;
+      const on = (i: number) => !!pad.buttons[i]?.pressed;
+      const ax = pad.axes[0] ?? 0;
+      const ay = pad.axes[1] ?? 0;
+      const latch = padLatch[slot];
+      const bombHeld = on(1) || on(2);
+      const startHeld = on(9);
+      const fireHeld = on(0) || on(7);
+      const state: PadState = {
+        left: ax < -0.35 || on(14),
+        right: ax > 0.35 || on(15),
+        up: ay < -0.35 || on(12),
+        down: ay > 0.35 || on(13),
+        fire: fireHeld,
+        focus: on(4) || on(5) || on(6),
+        bomb: bombHeld && !latch.bomb,
+        start: startHeld && !latch.start,
+      };
+      if (startHeld && !latch.start) padPause = true;
+      if ((fireHeld && !latch.fire) || (startHeld && !latch.start)) padConfirm = true;
+      latch.bomb = bombHeld;
+      latch.start = startHeld;
+      latch.fire = fireHeld;
+      return state;
+    };
+    const padCount = () => (typeof navigator !== "undefined" && navigator.getGamepads ? Array.from(navigator.getGamepads()).filter((g) => !!g && g.connected).length : 0);
+
     const readInput = (): InputState => {
       const keys = effective();
       const hit = (id: Action) => bindsRef.current[id].some((c) => keys.has(c));
@@ -290,25 +348,33 @@ export function Wingbreaker() {
       const wingBomb = !!world.coop && hit("p2Bomb");
       const wingEdge = wingBomb && !wingBombLatch;
       wingBombLatch = wingBomb;
+      const pads = padCount();
+      // alone: pad 1 is the pilot. Two pilots, one pad: the pad is the wingman.
+      const pad1 = !world.coop || pads >= 2 ? readPad(0) : idle;
+      const pad2 = world.coop ? readPad(pads >= 2 ? 1 : 0) : idle;
+      left = left || pad1.left;
+      right = right || pad1.right;
+      up = up || pad1.up;
+      down = down || pad1.down;
       const keying = left || right || up || down;
-      const keyFire = hit("p1Fire") || (!world.coop && keys.has("ControlRight"));
+      const keyFire = hit("p1Fire") || (!world.coop && keys.has("ControlRight")) || pad1.fire;
       const auto = world.meta.autoFire === true && world.mode === "play";
       return {
         left,
         right,
         up,
         down,
-        focus,
+        focus: focus || pad1.focus,
         fire: mouseFire || touchFireRef.current || keyFire || auto,
-        bomb: edge,
+        bomb: edge || pad1.bomb,
         pointer: pointer.on && !keying && world.mode === "play" && world.player.alive ? { x: pointer.x, y: pointer.y - 78 } : null,
-        wingLeft: world.coop && hit("p2Left"),
-        wingRight: world.coop && hit("p2Right"),
-        wingUp: world.coop && hit("p2Up"),
-        wingDown: world.coop && hit("p2Down"),
-        wingFocus: world.coop && hit("p2Focus"),
-        wingFire: (world.coop && hit("p2Fire")) || (auto && world.coop),
-        wingBomb: wingEdge,
+        wingLeft: (world.coop && hit("p2Left")) || pad2.left,
+        wingRight: (world.coop && hit("p2Right")) || pad2.right,
+        wingUp: (world.coop && hit("p2Up")) || pad2.up,
+        wingDown: (world.coop && hit("p2Down")) || pad2.down,
+        wingFocus: (world.coop && hit("p2Focus")) || pad2.focus,
+        wingFire: (world.coop && hit("p2Fire")) || (auto && world.coop) || pad2.fire,
+        wingBomb: wingEdge || pad2.bomb,
       };
     };
 
@@ -336,6 +402,7 @@ export function Wingbreaker() {
           n: world.bullets.filter((b) => b.friendly).length,
           styles: world.bullets.filter((b) => b.friendly).map((b) => b.style ?? 0),
         }),
+        getWorld: () => world,
         setKeys: (codes) => {
           override = codes.length ? codes : null;
           if (!codes.length) held.clear();
@@ -343,6 +410,24 @@ export function Wingbreaker() {
         },
       };
     }
+
+    // Enter on the keyboard, or A / Start on a gamepad: go on from wherever we are
+    const confirm = () => {
+      sfx.unlock();
+      const ctx = sfx.context();
+      if (ctx) music.attach(ctx);
+      if (world.mode === "menu") {
+        setPick(false);
+        chooseCrew(world, world.meta.crew === "coop" ? "coop" : "solo");
+      } else if (world.mode === "clear") nextLevel(world);
+      else if (world.mode === "bridge") skipBridge(world);
+      else if (world.mode === "over") retryLevel(world);
+      else if (world.mode === "pause") world.mode = "play";
+      else if (world.mode === "victory") world.mode = "menu";
+      else return;
+      sfx.drone(world.mode === "play");
+      sync();
+    };
 
     const onKeyDown = (e: KeyboardEvent) => {
       if (captureRef.current) {
@@ -365,9 +450,6 @@ export function Wingbreaker() {
       held.add(e.code);
       if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Space"].includes(e.code)) e.preventDefault();
       if (e.code === "Enter") {
-        sfx.unlock();
-        const ctx = sfx.context();
-        if (ctx) music.attach(ctx);
         if (world.mode === "arcadeover") {
           if (letterAt.current < 2) {
             letterAt.current += 1;
@@ -378,15 +460,7 @@ export function Wingbreaker() {
           sync();
           return;
         }
-        if (world.mode === "menu") {
-          setPick(false);
-          chooseCrew(world, world.meta.crew === "coop" ? "coop" : "solo");
-        } else if (world.mode === "clear") nextLevel(world);
-        else if (world.mode === "over") retryLevel(world);
-        else if (world.mode === "pause") world.mode = "play";
-        else if (world.mode === "victory") world.mode = "menu";
-        sfx.drone(world.mode === "play");
-        sync();
+        confirm();
       }
       if (world.mode === "bridge" && e.code === "KeyS") {
         openMode(world, "shop");
@@ -528,6 +602,17 @@ export function Wingbreaker() {
       last = now;
       acc += delta;
       let steps = 0;
+      if (world.mode !== "play") {
+        // menus and pause still need the pads read, for A / Start
+        readPad(0);
+        readPad(1);
+      }
+      if (padPause && (world.mode === "play" || world.mode === "pause")) {
+        world.mode = world.mode === "play" ? "pause" : "play";
+        sync();
+      } else if (padConfirm && world.mode !== "play" && world.mode !== "pause" && world.mode !== "bridge") confirm();
+      padPause = false;
+      padConfirm = false;
       while (acc >= fixed && steps < 5) {
         const input = readInput();
         const shotBefore = world.player.fireCd;
@@ -730,7 +815,7 @@ export function Wingbreaker() {
               <span className="text-sm text-muted">ARROWS</span>
             </button>
             <p className="text-xs leading-relaxed text-muted">
-              Pilot shoots with Z, bombs with Space. Wingman shoots with K, bombs with L. Change any of that in Options.
+              Pilot shoots with Z, bombs with Space. Wingman shoots with K, bombs with L. Change any of that in Options. Gamepads work too: one pad flies the wingman, two pads fly both. Fly over a downed partner to bring them back, and fly wing to wing for a damage bonus.
             </p>
             <button type="button" className={`${row} mt-1`} onClick={() => setPick(false)}>
               <span>BACK</span>
@@ -946,6 +1031,7 @@ export function Wingbreaker() {
             <p className="font-display text-lg tracking-[0.08em]">
               {ui.perfect ? "CLEAN" : "BREACH"} · +${ui.clearCash.toLocaleString("en-US")} · {ui.starLine || "★"}
             </p>
+            {ui.coop && <p className="mt-1 font-display text-sm tracking-[0.12em] text-ember">{crewLine(ui.tally)}</p>}
             <p className="mt-1 text-sm italic text-cold">{ui.quip}</p>
             <button
               type="button"
@@ -971,6 +1057,7 @@ export function Wingbreaker() {
             <p className="text-sm text-muted">{ui.chapter}</p>
             <p className="text-sm italic text-cold">{ui.quip}</p>
             <p className="font-display text-2xl text-ember">+${ui.clearCash.toLocaleString("en-US")} {ui.starLine}</p>
+            {ui.coop && <p className="font-display text-sm tracking-[0.12em] text-cold">{crewLine(ui.tally)}</p>}
             <p className="text-sm text-muted">Next: {String(ui.mission).padStart(3, "0")} · {ui.nextChapter}</p>
             <button type="button" className={row} onClick={() => act((w) => nextLevel(w))}>
               <span>{ui.level % 10 === 0 ? "NEXT CHAPTER" : "NEXT"}</span>

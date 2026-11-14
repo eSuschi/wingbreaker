@@ -1,7 +1,8 @@
 import { CHAPTERS, FAUNA, chapterIndex, chapterOf, gunName, skinDef, type SkinDef } from "./meta";
-import { HONEY_RING, familyColor } from "./v3";
+import { BOSS_LINES, HONEY_RING, bossPhases, familyColor } from "./v3";
 import { drawBossCreature, drawCritter, drawLoot } from "./critters";
-import { DASH_WARN, hermitHidden, podOffsets, WORLD_H, WORLD_W, type Enemy, type Player, type World } from "./world";
+import { drawHostileShot, drawStar } from "./shots";
+import { DASH_WARN, LINK_REACH, REVIVE_TIME, hermitHidden, podOffsets, WORLD_H, WORLD_W, type Enemy, type Player, type World } from "./world";
 
 const WING_SKIN: SkinDef = {
   id: "navy",
@@ -139,11 +140,14 @@ export function drawWorld(ctx: CanvasRenderingContext2D, w: World, focus: boolea
 
   const showShip =
     w.mode === "play" || w.mode === "pause" || w.mode === "bridge" || w.mode === "clear" || w.mode === "over" || w.mode === "victory";
+  if (showShip && w.wing && w.link) drawLink(ctx, w.player, w.wing, w.time);
   if (showShip && w.player.alive) drawPlayer(ctx, w, w.player, focus, skinDef(w.meta.skin), w.meta.skin);
   if (showShip && w.wing?.alive) drawPlayer(ctx, w, w.wing, false, WING_SKIN, "wing");
+  if (showShip && w.player.down) drawWreck(ctx, w.player, w.meta.skin, w.time);
+  if (showShip && w.wing?.down) drawWreck(ctx, w.wing, "wing", w.time);
 
   for (const b of w.bullets) {
-    if (!b.friendly) drawBullet(ctx, b.x, b.y, b.vx, b.vy, b.r, false, false, false, b.tint, b.shape ?? 0);
+    if (!b.friendly) drawBullet(ctx, b.x, b.y, b.vx, b.vy, b.r, false, false, false, b.tint, b.shape ?? 0, 0, w.time);
   }
 
   for (const p of w.parts) {
@@ -326,8 +330,24 @@ function drawHud(ctx: CanvasRenderingContext2D, w: World) {
   if (w.player.missiles > 0) {
     ctx.fillStyle = EMBER;
     ctx.font = "600 13px Barlow Condensed, sans-serif";
-    ctx.fillText(`MSL ${w.player.missiles}`, 16, 96);
+    ctx.fillText(`MSL ${w.player.missiles}`, 16, w.wing ? 112 : 96);
   }
+  if (w.wing) {
+    for (let i = 0; i < w.wing.lives; i++) {
+      ctx.save();
+      ctx.translate(52 + i * 16, 90);
+      ctx.scale(0.32, 0.32);
+      ctx.fillStyle = WING_SKIN.hull;
+      ctx.strokeStyle = WING_SKIN.edge;
+      ctx.lineWidth = 1.25;
+      wingPath(ctx);
+      ctx.fill();
+      ctx.stroke();
+      ctx.restore();
+    }
+  }
+  const boss = w.enemies.find((e) => e.kind === "boss" && e.hp > 0);
+  if (boss) drawBossBar(ctx, boss);
   for (let i = 0; i < w.player.lives; i++) {
     ctx.save();
     ctx.translate(52 + i * 16, 74);
@@ -386,6 +406,108 @@ function drawHud(ctx: CanvasRenderingContext2D, w: World) {
     ctx.textAlign = "left";
     ctx.fillText(`EN ${w.enemies.length} B ${w.bullets.length} SN ${Math.floor(w.snacks)}`, 16, WORLD_H - 48);
   }
+}
+
+/** Two pilots flying wing to wing: a live wire between the ships while the damage bonus holds. */
+function drawLink(ctx: CanvasRenderingContext2D, a: Player, b: Player, time: number) {
+  const span = Math.hypot(a.x - b.x, a.y - b.y);
+  const fade = Math.max(0.25, 1 - span / LINK_REACH);
+  ctx.save();
+  ctx.lineCap = "round";
+  for (const [width, color] of [
+    [7, `rgba(126,182,214,${0.22 * fade + 0.1})`],
+    [2, `rgba(244,251,255,${0.6 * fade + 0.25})`],
+  ] as const) {
+    ctx.strokeStyle = color;
+    ctx.lineWidth = width;
+    ctx.beginPath();
+    ctx.moveTo(a.x, a.y);
+    const steps = 6;
+    for (let i = 1; i < steps; i++) {
+      const t = i / steps;
+      const jitter = Math.sin(time * 30 + i * 2.1) * 4;
+      ctx.lineTo(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t + jitter);
+    }
+    ctx.lineTo(b.x, b.y);
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+/** A downed pilot: the drifting wreck, a call for help and the revive dial filling as the partner hovers. */
+function drawWreck(ctx: CanvasRenderingContext2D, p: Player, spriteId: string, time: number) {
+  ctx.save();
+  ctx.translate(p.x, p.y);
+  const img = hullOf(spriteId);
+  ctx.save();
+  ctx.rotate(0.5 + Math.sin(time * 1.3) * 0.08);
+  ctx.globalAlpha = 0.4;
+  if (img) blitSprite(ctx, img, spriteId === "wing" ? 40 : 52, 0);
+  else {
+    ctx.fillStyle = "#8e99a3";
+    wingPath(ctx);
+    ctx.fill();
+  }
+  ctx.restore();
+  ctx.fillStyle = `rgba(60,60,66,${0.35 + Math.sin(time * 3) * 0.1})`;
+  for (let i = 0; i < 3; i++) {
+    const rise = (time * 22 + i * 14) % 42;
+    ctx.beginPath();
+    ctx.arc(Math.sin(time * 2 + i) * 6, -10 - rise, 5 + rise * 0.18, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  const fill = Math.min(1, (p.revive ?? 0) / REVIVE_TIME);
+  ctx.lineWidth = 4;
+  ctx.strokeStyle = "rgba(244,251,255,0.25)";
+  ctx.beginPath();
+  ctx.arc(0, 0, 34, 0, Math.PI * 2);
+  ctx.stroke();
+  if (fill > 0) {
+    ctx.strokeStyle = EMBER;
+    ctx.beginPath();
+    ctx.arc(0, 0, 34, -Math.PI / 2, -Math.PI / 2 + fill * Math.PI * 2);
+    ctx.stroke();
+  }
+  if (Math.sin(time * 7) > -0.3) {
+    ctx.font = "700 14px Barlow Condensed, sans-serif";
+    ctx.textAlign = "center";
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = "rgba(8,10,14,0.9)";
+    ctx.strokeText("HELP!", 0, -44);
+    ctx.fillStyle = "#ffb07a";
+    ctx.fillText("HELP!", 0, -44);
+  }
+  ctx.restore();
+}
+
+/** The boss's name and health across the top of the screen, with a notch at each phase change. */
+function drawBossBar(ctx: CanvasRenderingContext2D, boss: Enemy) {
+  const narrow = WORLD_W < 560;
+  const width = Math.min(520, WORLD_W * (narrow ? 0.7 : 0.5));
+  const x = (WORLD_W - width) / 2;
+  const y = narrow ? 116 : 34;
+  const pal = CHAPTERS[boss.ch] ?? CHAPTERS[0];
+  const ratio = Math.max(0, boss.hp / boss.max);
+  const name = BOSS_LINES[boss.ch]?.[0] ?? "BOSS";
+  ctx.save();
+  ctx.font = `600 ${narrow ? 12 : 14}px Barlow Condensed, sans-serif`;
+  ctx.textAlign = "center";
+  ctx.lineWidth = 3;
+  ctx.strokeStyle = "rgba(8,10,14,0.85)";
+  ctx.strokeText(name, WORLD_W / 2, y - 7);
+  ctx.fillStyle = STEEL;
+  ctx.fillText(name, WORLD_W / 2, y - 7);
+  ctx.fillStyle = "rgba(8,10,14,0.8)";
+  ctx.fillRect(x - 2, y - 2, width + 4, 11);
+  ctx.fillStyle = "#2a1410";
+  ctx.fillRect(x, y, width, 7);
+  ctx.fillStyle = pal.accent;
+  ctx.fillRect(x, y, width * ratio, 7);
+  ctx.fillStyle = "rgba(255,255,255,0.35)";
+  ctx.fillRect(x, y, width * ratio, 2);
+  ctx.fillStyle = "rgba(8,10,14,0.95)";
+  for (const mark of bossPhases(boss.ch) === 4 ? [0.7, 0.4, 0.15] : [0.66, 0.33]) ctx.fillRect(x + width * mark - 1, y - 2, 2, 11);
+  ctx.restore();
 }
 
 function wingPath(ctx: CanvasRenderingContext2D) {
@@ -593,7 +715,6 @@ function drawEnemy(ctx: CanvasRenderingContext2D, e: Enemy, time: number, px: nu
       drawBossCreature(ctx, e.ch, time, e.flash > 0);
       ctx.restore();
     }
-    bar(ctx, 54 * k, -56 * k - 4, e.hp / e.max, pal.accent);
     if (e.dash !== undefined && e.dash < DASH_WARN) {
       // charge warning: a pulsing lane from the boss down to where it will dive
       const dx = (e.dashX ?? e.x) - e.x;
@@ -692,6 +813,7 @@ function drawBullet(
   tint: number,
   shape = 0,
   style = 0,
+  time = 0,
 ) {
   ctx.save();
   ctx.translate(x, y);
@@ -703,27 +825,13 @@ function drawBullet(
     else if (style === 1) drawFan(ctx, hot);
     else drawPulse(ctx, r, hot);
   } else {
-    // on a phone the shots are drawn smaller so they do not dwarf the critters
-    if (WORLD_W < 560) ctx.scale(0.8, 0.8);
-    if (shape !== 16) {
-      // Anything inside this pink-red halo hurts. The colour is used for
-      // nothing else, and the halo is sized past the sprite so a brown shot
-      // on a brown sky still reads.
-      const body = shape === 2 ? 9 : shape === 3 ? 18 : shape <= 4 ? 14 : Math.max(5.5, r * 1.7) * 1.05;
-      const pulse = 0.5 + Math.sin(y * 0.2) * 0.12;
-      ctx.fillStyle = `rgba(255,60,95,${pulse * 0.45})`;
-      ctx.beginPath();
-      ctx.arc(0, 0, body + 5, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.strokeStyle = `rgba(255,120,140,${0.55 + pulse * 0.4})`;
-      ctx.lineWidth = 1.6;
-      ctx.beginPath();
-      ctx.arc(0, 0, body + 5, 0, Math.PI * 2);
-      ctx.stroke();
+    const small = WORLD_W < 560;
+    if (!drawHostileShot(ctx, shape, x, y, vx, vy, time, small)) {
+      // art still loading: plain painted fallback
+      if (small) ctx.scale(0.8, 0.8);
+      ctx.rotate(Math.sin(y * 0.09 + x * 0.04) * 0.45);
+      drawPoop(ctx, shape, Math.max(5.5, r * 1.7), tint);
     }
-    if (shape === 2) ctx.rotate(Math.atan2(vy, vx));
-    else ctx.rotate(Math.sin(y * 0.09 + x * 0.04) * 0.45);
-    drawPoop(ctx, shape, Math.max(5.5, r * 1.7), tint);
   }
   ctx.restore();
 }
@@ -926,24 +1034,32 @@ function drawPickup(ctx: CanvasRenderingContext2D, kind: string, x: number, y: n
     return;
   }
   const small = WORLD_W < 560;
-  const ringR = small ? 14 : 17;
-  const pulse = 0.55 + Math.sin(time * 6) * 0.28;
   const gift = hue === 1 ? "#9ed24a" : hue === 2 ? "#e07a3d" : "#7eb6d6";
-  const tone = kind === "W" ? gift : kind === "$" ? "#e2b84a" : kind === "S" ? "#bfe3f5" : kind === "B" ? "#9ed24a" : kind === "D" ? "#f2d24a" : "#e07a3d";
-  ctx.fillStyle = "rgba(7,9,12,0.72)";
-  ctx.beginPath();
-  ctx.arc(0, 0, ringR, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.globalAlpha = kind === "W" ? 1 : 0.55 + pulse * 0.45;
-  ctx.strokeStyle = tone;
-  ctx.lineWidth = kind === "W" ? 2.4 : 1.8;
-  ctx.beginPath();
-  ctx.arc(0, 0, ringR + Math.sin(time * 5) * 1.2, 0, Math.PI * 2);
-  ctx.stroke();
-  ctx.globalAlpha = 1;
-  const z = small ? 0.85 : 1;
+  const tone = kind === "W" ? gift : kind === "S" ? "#bfe3f5" : kind === "B" ? "#9ed24a" : kind === "D" ? "#f2d24a" : kind === "M" ? "#ff8f6b" : "#e2b84a";
+  const power = kind !== "$";
+  if (power) {
+    // Power-ups glow: a soft pool of light in their colour and two orbiting
+    // sparkles. Nothing hostile ever glows, so the two cannot be confused.
+    const reach = (small ? 21 : 25) + Math.sin(time * 5 + x) * 2;
+    const glow = ctx.createRadialGradient(0, 0, 3, 0, 0, reach);
+    glow.addColorStop(0, tone + "aa");
+    glow.addColorStop(0.55, tone + "40");
+    glow.addColorStop(1, tone + "00");
+    ctx.fillStyle = glow;
+    ctx.beginPath();
+    ctx.arc(0, 0, reach, 0, Math.PI * 2);
+    ctx.fill();
+    const a = time * 2.4 + x * 0.05;
+    drawStar(ctx, Math.cos(a) * reach * 0.78, Math.sin(a) * reach * 0.78, 3.4, "#ffffff");
+    drawStar(ctx, Math.cos(a + 2.6) * reach * 0.7, Math.sin(a + 2.6) * reach * 0.7, 2.4, tone);
+  }
+  const z = (small ? 1.05 : 1.3) * (power ? 1 : 0.9);
   ctx.scale(z, z);
-  ctx.translate(0, Math.sin(time * 4 + x) * 1.2);
+  ctx.translate(0, Math.sin(time * 4 + x) * 1.4);
+  if (power) ctx.rotate(Math.sin(time * 2.2 + x) * 0.14);
+  // dark backing so the object keeps its shape against a bright sky
+  ctx.shadowColor = "rgba(0,0,0,0.75)";
+  ctx.shadowBlur = 5;
   if (kind === "W") {
     // gift box in the colour of the gun family it holds
     ctx.fillStyle = gift;

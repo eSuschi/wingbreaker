@@ -49,6 +49,9 @@ export type RunSnap = {
   missiles?: number;
   family?: GunFamily;
   snacks?: number;
+  /** the wingman's gun, when two pilots fly */
+  weapon2?: number;
+  family2?: GunFamily;
 };
 
 export type SaveFile = {
@@ -362,6 +365,8 @@ function sanitizeRun(raw: RunSnap | null | undefined): RunSnap | null {
     missiles: clampInt(raw.missiles, 0, 9, 0),
     family: raw.family === "neutron" || raw.family === "lance" ? raw.family : "pulse",
     snacks: clampInt(raw.snacks, 0, 100000, 0),
+    weapon2: raw.weapon2 == null ? undefined : clampInt(raw.weapon2, 1, 6, 1),
+    family2: raw.family2 === "neutron" || raw.family2 === "lance" || raw.family2 === "pulse" ? raw.family2 : undefined,
   };
 }
 

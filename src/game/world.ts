@@ -83,6 +83,8 @@ export type Bullet = {
   split?: boolean;
   /** enemies a piercing shot already passed through, so each is hit once */
   hit?: Enemy[];
+  /** which pilot fired it: 0 pilot, 1 wingman */
+  owner?: number;
 };
 
 export type Enemy = {
@@ -113,6 +115,8 @@ export type Enemy = {
   hide: number;
   /** draw and hit scale picked at spawn from the screen width */
   size?: number;
+  /** pilot whose shot last hit it, for the two-pilot kill tally */
+  by?: number;
   /** true when the enemy left the screen alive: removed without a kill or rewards */
   gone?: boolean;
   /** boss charge timer (seconds into the charge), undefined when not charging */
@@ -160,6 +164,10 @@ export type Player = {
   splat: number;
   slow: number;
   insured: boolean;
+  /** two pilots only: shot down and waiting for the partner to fly over */
+  down?: boolean;
+  /** seconds the partner has spent reviving this pilot */
+  revive?: number;
 };
 
 export type World = {
@@ -230,6 +238,11 @@ export type World = {
   pinned: number | null;
   starShow: string;
   daily: boolean;
+  /** kills this level by pilot and wingman */
+  tally: [number, number];
+  /** both pilots flying close: shared damage bonus */
+  link: boolean;
+  linkCd: number;
 };
 
 export type InputState = {
@@ -438,6 +451,9 @@ export function createWorld(best = 0): World {
     pinned: null,
     starShow: "",
     daily: false,
+    tally: [0, 0],
+    link: false,
+    linkCd: 0,
   };
 }
 
@@ -483,6 +499,8 @@ function liveSnap(w: World): RunSnap {
     missiles: Math.max(p.missiles, w.wing?.missiles ?? 0),
     family: p.family,
     snacks: Math.floor(w.snacks),
+    weapon2: w.wing?.weapon,
+    family2: w.wing?.family,
   };
 }
 
@@ -644,6 +662,9 @@ function resetField(w: World) {
   w.hazards = [];
   w.duck = false;
   w.bombArmor = 0;
+  w.tally = [0, 0];
+  w.link = false;
+  w.linkCd = 0;
 }
 
 function parkPlayer(w: World, snap: RunSnap | null) {
@@ -662,6 +683,8 @@ function parkPlayer(w: World, snap: RunSnap | null) {
   p.splat = 0;
   p.slow = 0;
   p.insured = !w.arcade && w.meta.upgrades.insurance > 0;
+  p.down = false;
+  p.revive = 0;
   p.inv = 1.35;
   p.alive = true;
   p.fireCd = 0.2;
@@ -671,14 +694,14 @@ function parkPlayer(w: World, snap: RunSnap | null) {
   w.score = snap?.score ?? 0;
   if (w.coop) {
     const wing = freshPlayer();
-    wing.weapon = p.weapon;
+    wing.weapon = snap?.weapon2 ?? p.weapon;
     wing.bombs = p.bombs;
     wing.lives = p.lives;
     wing.inv = 1.35;
     wing.fireCd = 0.2;
     wing.missiles = p.missiles;
     wing.missileCd = 0.55;
-    wing.family = p.family;
+    wing.family = snap?.family2 ?? p.family;
     wing.alive = true;
     p.x = WORLD_W * 0.38;
     wing.x = WORLD_W * 0.62;
@@ -849,6 +872,8 @@ export function nextLevel(w: World) {
     missiles: Math.max(w.player.missiles, w.wing?.missiles ?? 0, kit.missiles),
     family: w.player.family,
     snacks: Math.floor(w.snacks),
+    weapon2: w.wing ? Math.max(w.wing.weapon, kit.weapon) : undefined,
+    family2: w.wing?.family,
   });
 }
 
@@ -927,6 +952,8 @@ function spawnEnemy(w: World, kind: Kind, x: number, motion: Motion, drop?: Pick
   if (role === "wall") hp *= 3;
   // the shell already makes it slow to kill; keep it from becoming a sponge
   if (role === "hermit") hp = Math.max(4, Math.ceil(hp * 0.6));
+  // two guns on the field: critters take a third more, bosses half as much again
+  if (w.coop) hp = Math.ceil(hp * (kind === "boss" ? 1.5 : 1.35));
   if (role === "chip" || role === "rain" || role === "spore") hp = 1;
   if (role === "forge") {
     /* plate is the armor */
@@ -1041,7 +1068,7 @@ function addScore(w: World, base: number, x: number, y: number, show: boolean) {
   const prev = w.chain;
   w.chain = Math.min(40, w.chain + 1);
   w.chainT = 1.75;
-  if (show || w.chain >= 10) float(w, x, y - 8, String(gained), gained >= 200);
+  if (show) float(w, x, y - 8, String(gained), gained >= 200);
   if ((prev < 10 && w.chain >= 10) || (prev < 20 && w.chain >= 20) || (prev < 30 && w.chain >= 30)) {
     float(w, x, y - 26, `x${multiplierOf(w).toFixed(1)}`, true);
   }
@@ -1074,6 +1101,7 @@ function killEnemy(w: World, e: Enemy) {
   else if (e.kind === "cruiser") w.hitstop = 0.05;
   else if (e.kind === "drone") w.hitstop = 0.026;
   w.cues.push(big ? "big" : "kill");
+  if (e.by === 0 || e.by === 1) w.tally[e.by] += 1;
   addScore(w, e.score, e.x, e.y, big);
   if (e.kind === "cruiser") {
     float(w, e.x, e.y - 22, FAUNA[e.look % FAUNA.length].toUpperCase(), true);
@@ -1289,7 +1317,7 @@ function hurtPlayer(w: World, p: Player = w.player) {
     w.cues.push("shield");
     return;
   }
-  w.player.lives -= 1;
+  p.lives -= 1;
   p.inv = 1.85;
   w.chain = 0;
   w.perfect = false;
@@ -1310,9 +1338,21 @@ function hurtPlayer(w: World, p: Player = w.player) {
   burst(w, p.x, p.y, "#e07a3d", 18, 200, true);
   w.bullets = w.bullets.filter((b) => b.friendly);
   w.cues.push("hurt");
-  if (w.player.lives <= 0) {
-    w.player.alive = false;
-    if (w.wing) w.wing.alive = false;
+  if (p.lives <= 0) {
+    p.alive = false;
+    p.speedUp = 0;
+    // with a partner still flying, this pilot is only down: fly over the wreck to bring them back
+    p.down = living(w).length > 0;
+    p.revive = 0;
+    if (p.down) {
+      float(w, p.x, p.y - 40, p === w.wing ? "WING DOWN" : "PILOT DOWN", true);
+      w.banner = "FLY OVER THE WRECK TO REVIVE";
+      w.bannerT = 1.6;
+    }
+  }
+  if (living(w).length === 0) {
+    w.player.down = false;
+    if (w.wing) w.wing.down = false;
     w.deathLine = DEATH[Math.floor(w.rng() * DEATH.length)] ?? DEATH[0];
     if (w.arcade) {
       const pay = Math.round(w.purse);
@@ -1343,7 +1383,8 @@ function firePlayer(w: World, p: Player, focus: boolean) {
   const family = p.family || "pulse";
   const rank = Math.max(1, Math.min(6, p.weapon));
   const pack = volley(family, rank, focus);
-  const kick = feed ? 1.18 : 1;
+  const kick = (feed ? 1.18 : 1) * (w.link ? 1.25 : 1);
+  const owner = p === w.wing ? 1 : 0;
   for (const s of pack.shots) {
     if (w.bullets.length > 260) break;
     w.bullets.push({
@@ -1362,6 +1403,7 @@ function firePlayer(w: World, p: Player, focus: boolean) {
       style: s.style,
       pierce: s.pierce,
       splash: s.splash,
+      owner,
     });
   }
   const pods = podCount(rank);
@@ -1384,6 +1426,7 @@ function firePlayer(w: World, p: Player, focus: boolean) {
       style: family === "neutron" ? 2 : family === "lance" ? 3 : 0,
       pierce: family === "lance" ? 1 : 0,
       splash: 0,
+      owner,
     });
   }
   p.muzzle = 0.05;
@@ -1414,6 +1457,7 @@ function tryMissile(w: World, p: Player, fire: boolean, dt: number) {
     style: 4,
     pierce: 0,
     splash: 18,
+    owner: p === w.wing ? 1 : 0,
   });
   w.cues.push("missile");
 }
@@ -1495,8 +1539,9 @@ function releaseShot(w: World, e: Enemy) {
 
 function budgetShots(w: World, dt: number) {
   const rules = fireBudget(w.level, WORLD_W);
-  w.budget += rules.rate * dt;
-  if (w.budget < 1 || hostileCount(w) >= rules.cap) return;
+  const crowd = w.coop ? 1.25 : 1;
+  w.budget += rules.rate * crowd * dt;
+  if (w.budget < 1 || hostileCount(w) >= rules.cap * crowd) return;
   const crew = living(w);
   if (!crew.length) return;
   const who = crew[0];
@@ -1928,6 +1973,44 @@ function drivePilot(
   tryMissile(w, p, fire, dt);
 }
 
+export const REVIVE_TIME = 1.5;
+export const REVIVE_REACH = 64;
+export const LINK_REACH = 120;
+
+/** Two-pilot rules: reviving a downed partner, and the bonus for flying wing to wing. */
+function teamwork(w: World, dt: number) {
+  const a = w.player;
+  const b = w.wing;
+  if (!b) return;
+  for (const [fallen, friend] of [
+    [a, b],
+    [b, a],
+  ] as const) {
+    if (!fallen.down) continue;
+    if (!friend.alive) continue;
+    const near = Math.hypot(fallen.x - friend.x, fallen.y - friend.y) < REVIVE_REACH;
+    fallen.revive = near ? (fallen.revive ?? 0) + dt : Math.max(0, (fallen.revive ?? 0) - dt * 0.6);
+    if ((fallen.revive ?? 0) >= REVIVE_TIME) {
+      fallen.down = false;
+      fallen.alive = true;
+      fallen.lives = 1;
+      fallen.inv = 2.5;
+      fallen.revive = 0;
+      fallen.fireCd = 0.2;
+      float(w, fallen.x, fallen.y - 36, "BACK IN THE AIR", true);
+      cheer(w, fallen.x, fallen.y, "#7eb6d6");
+      w.cues.push("drive");
+    }
+  }
+  const linked = a.alive && b.alive && Math.hypot(a.x - b.x, a.y - b.y) < LINK_REACH;
+  w.linkCd = Math.max(0, w.linkCd - dt);
+  if (linked && !w.link && w.linkCd <= 0) {
+    float(w, (a.x + b.x) / 2, Math.min(a.y, b.y) - 40, "WING LINK +25%", true);
+    w.linkCd = 6;
+  }
+  w.link = linked;
+}
+
 export function step(w: World, dt: number, input: InputState) {
   dt = Math.min(dt, 0.05);
   if (w.hitstop > 0 && w.mode === "play") {
@@ -1957,6 +2040,7 @@ export function step(w: World, dt: number, input: InputState) {
 
   if (input.bomb) detonate(w, w.player);
   else if (input.wingBomb && w.wing) detonate(w, w.wing);
+  if (w.wing) teamwork(w, dt);
   stepHazards(w, dt);
 
   const stride = Math.min(28, WORLD_W * 0.028);
@@ -2086,11 +2170,15 @@ export function step(w: World, dt: number, input: InputState) {
           continue;
         }
         e.hp -= b.dmg;
+        e.by = b.owner ?? 0;
         sparkHit(w, e, b.x, b.y);
         if ((b.splash ?? 0) > 0) {
           for (const other of w.enemies) {
             if (other === e || other.hp <= 0) continue;
-            if (Math.hypot(b.x - other.x, b.y - other.y) < (b.splash ?? 0) + other.r * 0.45) other.hp -= b.dmg * 0.4;
+            if (Math.hypot(b.x - other.x, b.y - other.y) < (b.splash ?? 0) + other.r * 0.45) {
+              other.hp -= b.dmg * 0.4;
+              other.by = b.owner ?? 0;
+            }
           }
           ring(w, b.x, b.y, b.style === 2 ? "#b6e36a" : "#e07a3d", 0.18, 8, 1.2);
         }
@@ -2262,6 +2350,8 @@ function finishLevel(w: World) {
       missiles: Math.max(w.player.missiles, w.wing?.missiles ?? 0, kit.missiles),
       family: w.player.family,
       snacks: Math.floor(w.snacks),
+      weapon2: w.wing ? Math.max(w.wing.weapon, kit.weapon) : undefined,
+      family2: w.wing?.family,
     });
   }
 }
