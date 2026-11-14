@@ -1,5 +1,6 @@
 export const LEVELS = 100;
-export const SAVE_KEY = "wingbreaker.save.v2";
+export const SAVE_V2 = "wingbreaker.save.v2";
+export const SAVE_KEY = "wingbreaker.save.v3";
 const LEGACY_BEST = "wingbreaker.best.v1";
 
 export type SkinId = "steel" | "ember" | "navy" | "graphite" | "bone";
@@ -17,6 +18,9 @@ export type Campaign = {
   upgrades: Upgrades;
   mute: boolean;
   shake: boolean;
+  autoNext: boolean;
+  autoFire: boolean | null;
+  crew: "solo" | "coop";
 };
 
 export type RunSnap = {
@@ -32,7 +36,7 @@ export type RunSnap = {
 };
 
 export type SaveFile = {
-  v: 2;
+  v: 3;
   campaign: Campaign;
   run: RunSnap | null;
 };
@@ -111,6 +115,26 @@ export const QUIPS = [
   "The cow had a ring and no follow-up questions.",
   "That was not a strategy. That was a panic with good timing.",
   "They will not put this on the brochure.",
+  "Somebody call a janitor. A big one.",
+  "The sky is clean. Your conscience is your business.",
+  "Every critter out there just updated its will.",
+  "You did it. The poop did not.",
+  "Accounting confirms: that was a lot of explosions.",
+  "A space goat watched the whole thing. Unimpressed.",
+  "That formation had a five-year plan. It lasted forty seconds.",
+  "The briefcase jellies are calling an emergency meeting.",
+  "You've been rated five stars by absolutely no one.",
+  "Clean shooting. Questionable flying. We'll take it.",
+  "The galaxy thanks you. Quietly. Through clenched teeth.",
+  "Somewhere, a toilet seat glints with pride.",
+  "Your guns are warm. Your snacks are warmer.",
+  "The pigeons have filed a formal complaint.",
+  "That was almost elegant. Almost.",
+  "Nobody told the cows the war was on.",
+  "You've cleared the sector. The smell remains.",
+  "Excellent. Now do it again, but sideways.",
+  "The insurance company has stopped answering.",
+  "Somewhere a moon crab is rethinking its life.",
 ];
 
 export const FAUNA = [
@@ -167,6 +191,9 @@ export function freshCampaign(): Campaign {
     upgrades: { hull: 0, magazine: 0, capacitor: 0, magnet: 0, salvage: 0, trigger: 0, wings: 0, luck: 0, salvo: 0 },
     mute: false,
     shake: true,
+    autoNext: true,
+    autoFire: null,
+    crew: "solo",
   };
 }
 
@@ -241,6 +268,9 @@ function sanitize(raw: Partial<Campaign> | null | undefined, legacyBest: number)
     },
     mute: Boolean(raw.mute),
     shake: raw.shake !== false,
+    autoNext: raw.autoNext !== false,
+    autoFire: typeof raw.autoFire === "boolean" ? raw.autoFire : null,
+    crew: raw.crew === "coop" ? "coop" : "solo",
   };
 }
 
@@ -260,22 +290,26 @@ function sanitizeRun(raw: RunSnap | null | undefined): RunSnap | null {
 }
 
 export function loadFile(): SaveFile {
-  const empty = (): SaveFile => ({ v: 2, campaign: freshCampaign(), run: null });
+  const empty = (): SaveFile => ({ v: 3, campaign: freshCampaign(), run: null });
   try {
     if (typeof localStorage === "undefined") return empty();
     const legacy = Number(localStorage.getItem(LEGACY_BEST) || 0) || 0;
-    const raw = localStorage.getItem(SAVE_KEY);
+    const current = localStorage.getItem(SAVE_KEY);
+    const backup = localStorage.getItem(SAVE_V2);
+    const raw = current || backup;
     if (!raw) {
       const campaign = freshCampaign();
       campaign.best = legacy;
-      return { v: 2, campaign, run: null };
+      return { v: 3, campaign, run: null };
     }
     const parsed = JSON.parse(raw) as Partial<SaveFile>;
-    return {
-      v: 2,
+    const file: SaveFile = {
+      v: 3,
       campaign: sanitize(parsed.campaign, legacy),
       run: sanitizeRun(parsed.run),
     };
+    if (!current && backup) writeFile(file.campaign, file.run);
+    return file;
   } catch {
     return empty();
   }
@@ -284,7 +318,7 @@ export function loadFile(): SaveFile {
 export function writeFile(campaign: Campaign, run: RunSnap | null) {
   try {
     if (typeof localStorage === "undefined") return;
-    const file: SaveFile = { v: 2, campaign, run };
+    const file: SaveFile = { v: 3, campaign, run };
     localStorage.setItem(SAVE_KEY, JSON.stringify(file));
     localStorage.setItem(LEGACY_BEST, String(campaign.best));
   } catch {

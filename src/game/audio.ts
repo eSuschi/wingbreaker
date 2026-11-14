@@ -125,6 +125,21 @@ export class Sfx {
     this.tone(930, 0.1, "triangle", 0.035);
   }
 
+  plink(step = 0) {
+    if (this.muted || !this.ctx) return;
+    const t = this.ctx.currentTime + step * 0.07;
+    const osc = this.ctx.createOscillator();
+    const g = this.ctx.createGain();
+    osc.type = "square";
+    osc.frequency.setValueAtTime(540 + step * 70, t);
+    g.gain.setValueAtTime(0.028, t);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 0.06);
+    osc.connect(g);
+    g.connect(this.ctx.destination);
+    osc.start(t);
+    osc.stop(t + 0.08);
+  }
+
   drive() {
     this.tone(220, 0.12, "sawtooth", 0.04, 180);
     this.tone(440, 0.16, "triangle", 0.035, 220);

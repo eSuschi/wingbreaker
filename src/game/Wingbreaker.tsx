@@ -10,19 +10,21 @@ import {
   VIEW,
   closeOverlay,
   createWorld,
+  chooseCrew,
+  ensureAutoFire,
   loadBest,
   nextLevel,
   openMode,
   requestBomb,
-  resumeSaved,
   retryLevel,
   saveNow,
+  setAutoFire,
+  setAutoNext,
   setCoarsePointer,
   setMuted,
   setReduceMotion,
   setShake,
-  startCoop,
-  startSolo,
+  skipBridge,
   step,
   fitWorld,
   newMission,
@@ -55,6 +57,8 @@ type Ui = {
   cleared: boolean;
   lockShake: boolean;
   quip: string;
+  autoFire: boolean;
+  autoNext: boolean;
 };
 
 function readUi(world: World, muted: boolean): Ui {
@@ -73,13 +77,15 @@ function readUi(world: World, muted: boolean): Ui {
     clearCash: world.clearCash,
     chapter: chapterOf(beaten).name,
     nextChapter: chapterOf(world.meta.level).name,
-    hasSave: world.snap !== null,
+    hasSave: world.snap !== null || world.meta.level > 1,
     skin: world.meta.skin,
     owned: world.meta.owned.slice(),
     upgrades: { ...world.meta.upgrades },
     cleared: world.meta.cleared,
     lockShake: world.lockShake,
     quip: quipFor(world.level),
+    autoFire: world.meta.autoFire === true,
+    autoNext: world.meta.autoNext !== false,
   };
 }
 
@@ -131,6 +137,8 @@ export function Wingbreaker() {
     cleared: false,
     lockShake: false,
     quip: quipFor(1),
+    autoFire: false,
+    autoNext: true,
   });
   const [touch, setTouch] = useState(false);
   const [notice, setNotice] = useState("");
@@ -141,8 +149,10 @@ export function Wingbreaker() {
   const touchFireRef = useRef(false);
   const bindsRef = useRef(binds);
   const captureRef = useRef<Action | null>(null);
+  const pickRef = useRef(false);
   bindsRef.current = binds;
   captureRef.current = capture;
+  pickRef.current = pick;
 
   useEffect(() => {
     const coarse = window.matchMedia("(pointer: coarse)").matches;
@@ -156,6 +166,7 @@ export function Wingbreaker() {
 
     const world = createWorld(loadBest());
     worldRef.current = world;
+    ensureAutoFire(world, coarse);
     const sfx = new Sfx();
     sfx.muted = world.meta.mute;
     sfxRef.current = sfx;
@@ -220,14 +231,15 @@ export function Wingbreaker() {
       const wingEdge = wingBomb && !wingBombLatch;
       wingBombLatch = wingBomb;
       const keying = left || right || up || down;
-      const keyFire = hit("p1Fire") || (!world.coop && (keys.has("ControlRight")));
+      const keyFire = hit("p1Fire") || (!world.coop && keys.has("ControlRight"));
+      const auto = world.meta.autoFire === true && world.mode === "play";
       return {
         left,
         right,
         up,
         down,
         focus,
-        fire: mouseFire || touchFireRef.current || keyFire,
+        fire: mouseFire || touchFireRef.current || keyFire || auto,
         bomb: edge,
         pointer: pointer.on && !keying && world.mode === "play" && world.player.alive ? { x: pointer.x, y: pointer.y - 78 } : null,
         wingLeft: world.coop && hit("p2Left"),
@@ -235,40 +247,42 @@ export function Wingbreaker() {
         wingUp: world.coop && hit("p2Up"),
         wingDown: world.coop && hit("p2Down"),
         wingFocus: world.coop && hit("p2Focus"),
-        wingFire: world.coop && hit("p2Fire"),
+        wingFire: (world.coop && hit("p2Fire")) || (auto && world.coop),
         wingBomb: wingEdge,
       };
     };
 
     const sync = () => setUi(readUi(world, sfx.muted));
 
-    window.__controlsTest = {
-      getYaw: () => 0,
-      getSpeed: () => world.player.speedUp,
-      getX: () => world.player.x,
-      getY: () => world.player.y,
-      getMode: () => world.mode,
-      setGun: (n: number) => {
-        world.player.weapon = Math.max(1, Math.min(6, n));
-      },
-      getGun: () => world.player.weapon,
-      armMissiles: (n: number) => {
-        world.player.missiles = n;
-        world.player.missileCd = 0;
-      },
-      setLevel: (n: number) => {
-        world.level = n;
-      },
-      shotReport: () => ({
-        n: world.bullets.filter((b) => b.friendly).length,
-        styles: world.bullets.filter((b) => b.friendly).map((b) => b.style ?? 0),
-      }),
-      setKeys: (codes) => {
-        override = codes.length ? codes : null;
-        if (!codes.length) held.clear();
-        bombLatch = false;
-      },
-    };
+    if (import.meta.env.DEV) {
+      window.__controlsTest = {
+        getYaw: () => 0,
+        getSpeed: () => world.player.speedUp,
+        getX: () => world.player.x,
+        getY: () => world.player.y,
+        getMode: () => world.mode,
+        setGun: (n: number) => {
+          world.player.weapon = Math.max(1, Math.min(6, n));
+        },
+        getGun: () => world.player.weapon,
+        armMissiles: (n: number) => {
+          world.player.missiles = n;
+          world.player.missileCd = 0;
+        },
+        setLevel: (n: number) => {
+          world.level = n;
+        },
+        shotReport: () => ({
+          n: world.bullets.filter((b) => b.friendly).length,
+          styles: world.bullets.filter((b) => b.friendly).map((b) => b.style ?? 0),
+        }),
+        setKeys: (codes) => {
+          override = codes.length ? codes : null;
+          if (!codes.length) held.clear();
+          bombLatch = false;
+        },
+      };
+    }
 
     const onKeyDown = (e: KeyboardEvent) => {
       if (captureRef.current) {
@@ -292,12 +306,36 @@ export function Wingbreaker() {
       if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Space"].includes(e.code)) e.preventDefault();
       if (e.code === "Enter") {
         sfx.unlock();
-        if (world.mode === "menu") setPick(true);
-        else if (world.mode === "clear") nextLevel(world);
+        if (world.mode === "menu") {
+          setPick(false);
+          chooseCrew(world, world.meta.crew === "coop" ? "coop" : "solo");
+        } else if (world.mode === "clear") nextLevel(world);
         else if (world.mode === "over") retryLevel(world);
         else if (world.mode === "pause") world.mode = "play";
         else if (world.mode === "victory") world.mode = "menu";
         sfx.drone(world.mode === "play");
+        sync();
+      }
+      if (world.mode === "bridge" && e.code === "KeyS") {
+        openMode(world, "shop");
+        sfx.drone(false);
+        sync();
+        return;
+      }
+      if (world.mode === "bridge") {
+        const fires = new Set([...bindsRef.current.p1Fire, ...bindsRef.current.p2Fire, "KeyZ"]);
+        if (fires.has(e.code)) {
+          skipBridge(world);
+          sfx.drone(true);
+          sync();
+          return;
+        }
+      }
+      if (e.code === "KeyF" && world.mode === "play") {
+        const on = world.meta.autoFire !== true;
+        setAutoFire(world, on);
+        setNotice(on ? "AUTO FIRE ON" : "AUTO FIRE OFF");
+        window.setTimeout(() => setNotice(""), 1000);
         sync();
       }
       if (e.code === "Escape" && world.mode === "menu") {
@@ -310,7 +348,6 @@ export function Wingbreaker() {
         else if (world.mode === "play" && e.code === "Escape") world.mode = "pause";
         else if (world.mode === "pause" && (e.code === "Escape" || e.code === "KeyP")) world.mode = "play";
         else if (world.mode === "shop" || world.mode === "options") closeOverlay(world);
-        else if (world.mode === "standby") world.mode = "menu";
         sfx.drone(world.mode === "play");
         sync();
       }
@@ -324,7 +361,10 @@ export function Wingbreaker() {
     const onKeyUp = (e: KeyboardEvent) => held.delete(e.code);
     const clearHeld = () => held.clear();
     const onVis = () => {
-      if (document.hidden) held.clear();
+      if (document.hidden) {
+        held.clear();
+        saveNow(world);
+      }
     };
     window.addEventListener("keydown", onKeyDown);
     window.addEventListener("keyup", onKeyUp);
@@ -334,6 +374,12 @@ export function Wingbreaker() {
     const onPointerDown = (e: PointerEvent) => {
       if ((e.target as HTMLElement | null)?.closest("button")) return;
       sfx.unlock();
+      if (world.mode === "bridge") {
+        skipBridge(world);
+        sfx.drone(true);
+        sync();
+        return;
+      }
       const pt = toWorld(e.clientX, e.clientY);
       pointer.x = pt.x;
       pointer.y = pt.y;
@@ -370,6 +416,7 @@ export function Wingbreaker() {
     let acc = 0;
     let hudAcc = 0;
     let shotGate = 0;
+    let plinkN = 0;
     let lastMode = world.mode;
     let raf = 0;
     const fixed = 1 / 60;
@@ -393,6 +440,7 @@ export function Wingbreaker() {
       }
       let killed = false;
       let big = false;
+      plinkN = 0;
       for (const cue of world.cues) {
         if (cue === "kill") killed = true;
         else if (cue === "big") big = true;
@@ -407,6 +455,7 @@ export function Wingbreaker() {
         else if (cue === "clean") sfx.clean();
         else if (cue === "drive") sfx.drive();
         else if (cue === "missile") sfx.missile();
+        else if (cue === "plink") sfx.plink(plinkN++);
       }
       world.cues.length = 0;
       if (big) sfx.kill(true);
@@ -426,6 +475,11 @@ export function Wingbreaker() {
 
       hudAcc += delta;
       if (world.mode !== lastMode || hudAcc > 0.15) {
+        if (world.mode === "pause" && lastMode === "play") {
+          saveNow(world);
+          setNotice("SAVED");
+          window.setTimeout(() => setNotice(""), 1000);
+        }
         if (world.mode !== lastMode) sfx.drone(world.mode === "play");
         lastMode = world.mode;
         hudAcc = 0;
@@ -449,7 +503,7 @@ export function Wingbreaker() {
       canvas.removeEventListener("pointercancel", onPointerUp);
       canvas.removeEventListener("pointerleave", onPointerLeave);
       sfx.drone(false);
-      delete window.__controlsTest;
+      if (import.meta.env.DEV) delete window.__controlsTest;
     };
   }, []);
 
@@ -461,11 +515,6 @@ export function Wingbreaker() {
     fn(world);
     sfx.drone(world.mode === "play");
     setUi(readUi(world, sfx.muted));
-  };
-
-  const toast = (text: string) => {
-    setNotice(text);
-    window.setTimeout(() => setNotice(""), 1400);
   };
 
   const bomb = () => {
@@ -503,13 +552,15 @@ export function Wingbreaker() {
               <button
                 type="button"
                 className={row}
-                onClick={() => {
-                  sfxRef.current?.unlock();
-                  setPick(true);
-                }}
+                onClick={() => act((w) => chooseCrew(w, w.meta.crew === "coop" ? "coop" : "solo"))}
               >
-                <span>START</span>
-                <span className="text-sm text-muted">{String(ui.mission).padStart(3, "0")}</span>
+                <span>{ui.hasSave ? "CONTINUE" : "CAMPAIGN"}</span>
+                <span className="text-sm text-muted">
+                  {String(ui.mission).padStart(3, "0")} · {ui.nextChapter}
+                </span>
+              </button>
+              <button type="button" className="self-start text-xs tracking-[0.16em] text-muted underline" onClick={() => setPick(true)}>
+                change
               </button>
               <button type="button" className={row} onClick={() => act((w) => openMode(w, "shop"))}>
                 <span>SHOP</span>
@@ -517,22 +568,9 @@ export function Wingbreaker() {
               <button type="button" className={row} onClick={() => { setArmReset(false); setCapture(null); act((w) => openMode(w, "options")); }}>
                 <span>OPTIONS</span>
               </button>
-              <button type="button" className={row} disabled={!ui.hasSave} onClick={() => act((w) => resumeSaved(w))}>
-                <span>LOAD</span>
-              </button>
-              <button
-                type="button"
-                className={row}
-                onClick={() => act((w) => { saveNow(w); toast("SAVED"); })}
-              >
-                <span>SAVE</span>
-              </button>
-              <button type="button" className={row} onClick={() => act((w) => openMode(w, "standby"))}>
-                <span>EXIT</span>
-              </button>
             </div>
             <p className="mt-4 text-xs leading-relaxed text-muted">
-              {touch ? "Drag to move. Separate FIRE." : "Move · click or Z to shoot · Shift focus · Space bomb · P pause"}
+              {touch ? "Drag to move. AUTO fires unless you turn it off." : "Move · click or Z to shoot · Shift focus · Space bomb · P pause · F auto fire"}
             </p>
           </div>
         </div>
@@ -544,11 +582,11 @@ export function Wingbreaker() {
             <p className="font-display text-sm tracking-[0.28em] text-muted">SORTIE</p>
             <h2 className="font-display text-4xl tracking-wide">WHO IS FLYING</h2>
             <p className="text-sm text-muted">One keyboard. Two chairs if you are brave.</p>
-            <button type="button" className={row} onClick={() => act((w) => { setPick(false); startSolo(w); })}>
+            <button type="button" className={row} onClick={() => act((w) => { setPick(false); chooseCrew(w, "solo"); })}>
               <span>SOLO</span>
               <span className="text-sm text-muted">WASD</span>
             </button>
-            <button type="button" className={row} onClick={() => act((w) => { setPick(false); startCoop(w); })}>
+            <button type="button" className={row} onClick={() => act((w) => { setPick(false); chooseCrew(w, "coop"); })}>
               <span>TWO PILOTS</span>
               <span className="text-sm text-muted">ARROWS</span>
             </button>
@@ -641,6 +679,14 @@ export function Wingbreaker() {
               <span>SHAKE</span>
               <span className="text-sm text-muted">{ui.lockShake ? "SYSTEM" : ui.shake ? "ON" : "OFF"}</span>
             </button>
+            <button type="button" className={row} onClick={() => act((w) => setAutoFire(w, w.meta.autoFire !== true))}>
+              <span>AUTO FIRE</span>
+              <span className="text-sm text-muted">{ui.autoFire ? "ON" : "OFF"}</span>
+            </button>
+            <button type="button" className={row} onClick={() => act((w) => setAutoNext(w, !w.meta.autoNext))}>
+              <span>AUTO NEXT</span>
+              <span className="text-sm text-muted">{ui.autoNext ? "ON" : "OFF"}</span>
+            </button>
             <p className="mt-3 font-display text-sm tracking-[0.22em] text-muted">CONTROLS</p>
             <p className="text-xs text-muted">Click a row, then press the new key. Escape cancels.</p>
             <div className="grid grid-cols-1 gap-1 sm:grid-cols-2">
@@ -692,19 +738,6 @@ export function Wingbreaker() {
         </div>
       )}
 
-      {ui.mode === "standby" && (
-        <div className="absolute inset-0 z-20 flex items-center justify-center bg-bg/85">
-          <div className="w-[min(92vw,380px)] px-5 text-center">
-            <p className="font-display text-sm tracking-[0.28em] text-muted">SIGNAL</p>
-            <h2 className="font-display mt-2 text-4xl tracking-wide">QUIET</h2>
-            <p className="mt-3 text-sm text-muted">The tab stays open. Come back when you want.</p>
-            <button type="button" className={`${row} mt-6`} onClick={() => act((w) => openMode(w, "menu"))}>
-              <span>RETURN</span>
-            </button>
-          </div>
-        </div>
-      )}
-
       {ui.mode === "pause" && (
         <div className="absolute inset-0 z-20 flex items-center justify-center bg-bg/55">
           <div className="flex w-[min(92vw,320px)] flex-col gap-2 px-5">
@@ -713,11 +746,35 @@ export function Wingbreaker() {
             <button type="button" className={row} onClick={() => act((w) => openMode(w, "play"))}>
               <span>RESUME</span>
             </button>
-            <button type="button" className={row} onClick={() => act((w) => { saveNow(w); toast("SAVED"); })}>
-              <span>SAVE</span>
+            <button type="button" className={row} onClick={() => { setCapture(null); act((w) => openMode(w, "options")); }}>
+              <span>OPTIONS</span>
             </button>
             <button type="button" className={row} onClick={() => act((w) => openMode(w, "menu"))}>
               <span>MENU</span>
+            </button>
+          </div>
+        </div>
+      )}
+
+      {ui.mode === "bridge" && (
+        <div className="absolute inset-x-0 top-16 z-20 flex justify-center px-4">
+          <div
+            className="w-[min(92vw,420px)] border border-line bg-bg/85 px-4 py-3 text-center"
+            onClick={() => act((w) => skipBridge(w))}
+          >
+            <p className="font-display text-lg tracking-[0.08em]">
+              {ui.perfect ? "CLEAN" : "BREACH"} · +${ui.clearCash.toLocaleString("en-US")}
+            </p>
+            <p className="mt-1 text-sm italic text-cold">{ui.quip}</p>
+            <button
+              type="button"
+              className={`${row} mt-3 h-10`}
+              onClick={(e) => {
+                e.stopPropagation();
+                act((w) => openMode(w, "shop"));
+              }}
+            >
+              <span>S – SHOP</span>
             </button>
           </div>
         </div>
@@ -727,13 +784,15 @@ export function Wingbreaker() {
         <div className="absolute inset-0 z-20 flex items-center justify-center bg-bg/55">
           <div className="flex w-[min(92vw,380px)] flex-col gap-2 px-5">
             <p className="font-display text-sm tracking-[0.28em] text-muted">LEVEL {String(ui.level).padStart(3, "0")}</p>
-            <h2 className="font-display text-4xl tracking-wide">{ui.perfect ? "CLEAN" : "BREACH"}</h2>
+            <h2 className="font-display text-4xl tracking-wide">
+              {ui.level % 10 === 0 ? "CHAPTER CLEAR" : ui.perfect ? "CLEAN" : "BREACH"}
+            </h2>
             <p className="text-sm text-muted">{ui.chapter}</p>
             <p className="text-sm italic text-cold">{ui.quip}</p>
             <p className="font-display text-2xl text-ember">+${ui.clearCash.toLocaleString("en-US")}</p>
             <p className="text-sm text-muted">Next: {String(ui.mission).padStart(3, "0")} · {ui.nextChapter}</p>
             <button type="button" className={row} onClick={() => act((w) => nextLevel(w))}>
-              <span>NEXT</span>
+              <span>{ui.level % 10 === 0 ? "NEXT CHAPTER" : "NEXT"}</span>
             </button>
             <button type="button" className={row} onClick={() => act((w) => openMode(w, "shop"))}>
               <span>SHOP</span>
@@ -786,6 +845,22 @@ export function Wingbreaker() {
       )}
 
       {touch && ui.mode === "play" && (
+        <button
+          type="button"
+          aria-label="Auto fire"
+          onPointerDown={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            act((w) => setAutoFire(w, w.meta.autoFire !== true));
+          }}
+          className={`absolute left-4 z-30 flex h-10 w-10 items-center justify-center rounded-full border font-display text-[10px] tracking-wide ${ui.autoFire ? "border-ember bg-ember text-bg" : "border-line bg-bg text-muted"}`}
+          style={{ opacity: 0.55, bottom: ui.autoFire ? 32 : 96 }}
+        >
+          AUTO
+        </button>
+      )}
+
+      {touch && ui.mode === "play" && !ui.autoFire && (
         <button
           type="button"
           onPointerDown={(e) => {

@@ -11,7 +11,8 @@ export const Route = createRootRoute({
       { charSet: "utf-8" },
       { name: "viewport", content: "width=device-width, initial-scale=1, viewport-fit=cover" },
       { title: APP_NAME },
-      { name: "description", content: "A serious vertical shooter. Hold the lane, feed your guns, break the wave." },
+      { name: "description", content: "A vertical shooter with too many critters, too many guns and a worrying amount of poop." },
+      { property: "og:description", content: "A vertical shooter with too many critters, too many guns and a worrying amount of poop." },
       { name: "theme-color", content: "#07090c" },
     ],
     links: [

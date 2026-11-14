@@ -130,7 +130,7 @@ export function drawWorld(ctx: CanvasRenderingContext2D, w: World, focus: boolea
   }
 
   const showShip =
-    w.mode === "play" || w.mode === "pause" || w.mode === "clear" || w.mode === "over" || w.mode === "victory";
+    w.mode === "play" || w.mode === "pause" || w.mode === "bridge" || w.mode === "clear" || w.mode === "over" || w.mode === "victory";
   if (showShip && w.player.alive) drawPlayer(ctx, w, w.player, focus, skinDef(w.meta.skin), w.meta.skin);
   if (showShip && w.wing?.alive) drawPlayer(ctx, w, w.wing, false, WING_SKIN, "wing");
 
@@ -190,7 +190,7 @@ export function drawWorld(ctx: CanvasRenderingContext2D, w: World, focus: boolea
 
   ctx.restore();
 
-  if (w.mode === "play" || w.mode === "pause" || w.mode === "clear" || w.mode === "over" || w.mode === "victory") drawHud(ctx, w);
+  if (w.mode === "play" || w.mode === "pause" || w.mode === "bridge" || w.mode === "clear" || w.mode === "over" || w.mode === "victory") drawHud(ctx, w);
 }
 
 let hangarImg: HTMLImageElement | null = null;
