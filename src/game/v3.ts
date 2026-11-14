@@ -88,7 +88,7 @@ export function fireBudget(level: number, width = 700) {
   // the first five levels ease in, from about two thirds of the normal fire
   const ease = lv >= 5 ? 1 : 0.55 + 0.09 * lv;
   const cap = Math.round((8 + 52 * Math.pow(d, 0.85)) * wide * ease);
-  const rate = (1.2 + 4.8 * Math.pow(d, 0.9)) * wide * ease;
+  const rate = (1.2 + 4.3 * Math.pow(d, 0.9)) * wide * ease;
   const slow = 2.5 - (2.5 - 0.9) * Math.pow(d, 0.85);
   const fast = 4 - (4 - 1.4) * Math.pow(d, 0.85);
   const speed = 130 + 110 * d;
@@ -174,7 +174,8 @@ export function extraLifeAt(score: number, paid: number) {
   return { grant, paid: next };
 }
 
-const DENSITY = [0.85, 0.9, 0.95, 1, 1, 1.05, 1.1, 1.15, 1.3];
+// level 9 of a chapter is the gauntlet: four waves, a little denser than the rest
+const DENSITY = [0.85, 0.9, 0.95, 1, 1, 1.05, 1.1, 1.12, 1.15];
 
 function pushGrid(out: VSpawn[], at: number, n: number, kind: VKind, role: string, W: number, H: number, motion: string, base: number) {
   const cols = Math.max(4, Math.min(10, Math.round(W / (72 * sizeMul(W)))));
