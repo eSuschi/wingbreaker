@@ -1,7 +1,7 @@
 import { CHAPTERS, FAUNA, chapterIndex, chapterOf, gunName, skinDef, type SkinDef } from "./meta";
 import { familyColor } from "./v3";
 import { drawBossCreature, drawCritter, drawLoot } from "./critters";
-import { podOffsets, WORLD_H, WORLD_W, type Enemy, type Player, type World } from "./world";
+import { DASH_WARN, hermitHidden, podOffsets, WORLD_H, WORLD_W, type Enemy, type Player, type World } from "./world";
 
 const WING_SKIN: SkinDef = {
   id: "navy",
@@ -125,6 +125,11 @@ export function drawWorld(ctx: CanvasRenderingContext2D, w: World, focus: boolea
   drawBackdrop(ctx, w);
 
   for (const h of w.hazards) drawHazard(ctx, h, w.time);
+  if (w.hazards.some((h) => h.kind === "eclipse" && h.phase > 0)) {
+    // the eclipse darkens the sky only; shots, pickups and ships stay lit on top
+    ctx.fillStyle = "rgba(0,0,0,0.72)";
+    ctx.fillRect(-20, -20, WORLD_W + 40, WORLD_H + 40);
+  }
   for (const pk of w.pickups) drawPickup(ctx, pk.kind, pk.x, pk.y, w.time, pk.hue ?? 0);
   for (const e of w.enemies) drawEnemy(ctx, e, w.time, w.player.x, w.player.y);
 
@@ -188,10 +193,6 @@ export function drawWorld(ctx: CanvasRenderingContext2D, w: World, focus: boolea
 
   if (w.freeze > 0) {
     ctx.fillStyle = "rgba(120, 90, 40, 0.18)";
-    ctx.fillRect(-20, -20, WORLD_W + 40, WORLD_H + 40);
-  }
-  if (w.hazards.some((h) => h.kind === "eclipse" && h.phase > 0)) {
-    ctx.fillStyle = "rgba(0,0,0,0.72)";
     ctx.fillRect(-20, -20, WORLD_W + 40, WORLD_H + 40);
   }
   if (w.flash > 0) {
@@ -357,7 +358,8 @@ function drawHud(ctx: CanvasRenderingContext2D, w: World) {
   ctx.textAlign = "right";
   ctx.fillStyle = EMBER;
   ctx.font = "600 12px Barlow Condensed, sans-serif";
-  ctx.fillText(`SNACK ${Math.floor(w.snacks)}`, WORLD_W - 16, by - 16);
+  const lift = w.touch ? 78 : 0;
+  ctx.fillText(`SNACK ${Math.floor(w.snacks)}`, WORLD_W - 16, by - 16 - lift);
   ctx.textAlign = "left";
 
   if (w.wing) {
@@ -372,10 +374,10 @@ function drawHud(ctx: CanvasRenderingContext2D, w: World) {
     const x = WORLD_W - 22 - (4 - i) * 11;
     ctx.strokeStyle = STEEL_DIM;
     ctx.lineWidth = 1;
-    ctx.strokeRect(x, by - 1, 7, 5);
+    ctx.strokeRect(x, by - 1 - lift, 7, 5);
     if (i < w.player.bombs) {
       ctx.fillStyle = EMBER;
-      ctx.fillRect(x + 1, by, 5, 3);
+      ctx.fillRect(x + 1, by - lift, 5, 3);
     }
   }
   if (w.dev) {
@@ -577,6 +579,20 @@ function drawEnemy(ctx: CanvasRenderingContext2D, e: Enemy, time: number, px: nu
       ctx.shadowBlur = 0;
     } else drawBossCreature(ctx, e.ch, time, e.flash > 0);
     bar(ctx, 54, -56, e.hp / e.max, pal.accent);
+    if (e.dash !== undefined && e.dash < DASH_WARN) {
+      // charge warning: a pulsing lane from the boss down to where it will dive
+      const dx = (e.dashX ?? e.x) - e.x;
+      ctx.save();
+      ctx.globalAlpha = 0.25 + 0.25 * Math.abs(Math.sin(time * 18));
+      ctx.strokeStyle = pal.accent;
+      ctx.lineWidth = 26;
+      ctx.lineCap = "round";
+      ctx.beginPath();
+      ctx.moveTo(0, 30);
+      ctx.lineTo(dx, WORLD_H * 0.72 - e.y);
+      ctx.stroke();
+      ctx.restore();
+    }
     if (e.mark === 0 && e.fire < 0.28 && e.fire > 0 && e.y < py) {
       const a = Math.atan2(py - e.y, px - e.x);
       ctx.strokeStyle = pal.accent;
@@ -589,8 +605,27 @@ function drawEnemy(ctx: CanvasRenderingContext2D, e: Enemy, time: number, px: nu
   } else {
     const face = faceOf(e.look);
     const h = e.kind === "cruiser" ? 40 : e.kind === "wedge" ? 32 : e.kind === "drone" ? 28 : 26;
+    const shell = hermitHidden(e);
+    if (shell) ctx.globalAlpha = 0.35;
     if (face) blitSprite(ctx, face, h, bob);
     else drawCritter(ctx, e.look, e.kind, time, e.spin, e.flash > 0);
+    ctx.globalAlpha = 1;
+    if (shell) {
+      // Rock Hermit tucked in its shell: shots ping off until it peeks out
+      ctx.fillStyle = "#4a4238";
+      ctx.strokeStyle = "#a89a86";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(0, bob, h * 0.6, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+      ctx.fillStyle = "#6b6052";
+      for (const [ox, oy, r] of [[-6, -4, 4], [7, 2, 5], [-2, 8, 3]] as const) {
+        ctx.beginPath();
+        ctx.arc(ox, oy + bob, r, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
     if (e.kind === "cruiser") bar(ctx, 22, h * 0.42, e.hp / e.max, pal.accent);
   }
   ctx.restore();

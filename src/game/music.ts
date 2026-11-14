@@ -72,6 +72,7 @@ export class Music {
 
   stop() {
     this.on = false;
+    this.next = 0;
   }
 
   tick(now: number, enemies: number, gauntlet: boolean) {
@@ -80,7 +81,9 @@ export class Music {
     const bpm = song.bpm + (this.boss ? 6 : 0);
     const spb = 60 / bpm;
     const eighth = spb / 2;
-    if (this.next === 0) this.next = this.ctx.currentTime + 0.05;
+    // after a pause, the shop or a muted stretch, start fresh instead of
+    // firing every missed note at once
+    if (this.next === 0 || this.next < this.ctx.currentTime) this.next = this.ctx.currentTime + 0.05;
     while (this.next < this.ctx.currentTime + 0.1 && this.next < now + 5) {
       const beat = this.step % 8;
       const bar = Math.floor(this.step / 8) % 4;

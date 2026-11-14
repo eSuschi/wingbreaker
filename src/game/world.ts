@@ -108,6 +108,13 @@ export type Enemy = {
   warn: number;
   plate: number;
   hide: number;
+  /** true when the enemy left the screen alive: removed without a kill or rewards */
+  gone?: boolean;
+  /** boss charge timer (seconds into the charge), undefined when not charging */
+  dash?: number;
+  dashX?: number;
+  /** boss banners already shown, so each one appears once */
+  said?: string[];
 };
 
 export type Pickup = { kind: PickupKind; x: number; y: number; vx: number; vy: number; value: number; rest: number; hue?: number; age?: number };
@@ -688,7 +695,7 @@ export function startSortie(w: World, snap?: RunSnap | null) {
   w.record = false;
   parkPlayer(w, use);
   w.mode = "play";
-  w.rng = mulberry32(w.seed || ((Math.random() * 1e9) | 0));
+  w.rng = mulberry32(w.daily && w.seed ? w.seed : (Math.random() * 1e9) | 0);
   if (!w.seed) w.seed = (Math.random() * 1e9) | 0;
   launchLevel(w);
   persist(w, liveSnap(w));
@@ -1088,6 +1095,8 @@ function spawnEnemy(w: World, kind: Kind, x: number, motion: Motion, drop?: Pick
   let hp = body.hp;
   let r = body.r;
   if (role === "wall") hp *= 3;
+  // the shell already makes it slow to kill; keep it from becoming a sponge
+  if (role === "hermit") hp = Math.max(4, Math.ceil(hp * 0.6));
   if (role === "chip" || role === "rain" || role === "spore") hp = 1;
   if (role === "forge") {
     /* plate is the armor */
@@ -1609,10 +1618,10 @@ function shotCap(level: number) {
   return 22;
 }
 
-function pushHostile(w: World, x: number, y: number, a: number, speed: number, r: number, shape: number) {
+function pushHostile(w: World, x: number, y: number, a: number, speed: number, r: number, shape: number, child = false) {
   if (w.bullets.length > 300) return;
   const who = nearestPilot(w, x, y);
-  if (Math.hypot(who.x - x, who.y - y) < 100) return;
+  if (!child && Math.hypot(who.x - x, who.y - y) < 100) return;
   w.bullets.push({
     x, y,
     vx: Math.cos(a) * speed,
@@ -1628,7 +1637,7 @@ function pushHostile(w: World, x: number, y: number, a: number, speed: number, r
     shape,
     age: 0,
     bounces: 0,
-    split: false,
+    split: child,
   });
 }
 
@@ -1664,7 +1673,7 @@ function budgetShots(w: World, dt: number) {
   const who = crew[0];
   const pool = w.enemies.filter((e, i) => {
     if (e.hp <= 0 || e.kind === "boss" || e.warn > 0 || e.fire > 0) return false;
-    if (e.hide > 0.2 && e.role === "hermit") return false;
+    if (hermitHidden(e)) return false;
     if (e.role === "ghost" && Math.sin(e.t * 2.4) < 0) return false;
     if (!mayShoot(e.kind, e.role, w.level, i)) return false;
     return e.y > 20 && e.y < who.y - 140;
@@ -1684,13 +1693,17 @@ function runBoss(w: World, e: Enemy) {
   for (const cmd of cmds) {
     if (cmd.op === "shot") pushHostile(w, e.x, e.y + 16, cmd.a, cmd.speed, cmd.r, cmd.shape);
     else if (cmd.op === "summon" && special && w.enemies.length < 28) spawnEnemy(w, cmd.kind, cmd.x, "sine", undefined, e.y + 20, 0, undefined, e.y + 30, 0, cmd.role);
-    else if (cmd.op === "banner" && special) {
-      w.banner = cmd.text;
-      w.bannerT = 0.8;
+    else if (cmd.op === "banner") {
+      e.said = e.said ?? [];
+      if (!e.said.includes(cmd.text)) {
+        e.said.push(cmd.text);
+        w.banner = cmd.text;
+        w.bannerT = 1.2;
+      }
     } else if (cmd.op === "clear") cashBullets(w);
-    else if (cmd.op === "dive" && special) {
-      e.vy = 280;
-      e.y += 40;
+    else if (cmd.op === "dive" && special && e.dash === undefined) {
+      e.dash = 0;
+      e.dashX = clamp(who.x, edgeOf("boss"), WORLD_W - edgeOf("boss"));
     }
   }
 }
@@ -1846,6 +1859,7 @@ function reap(w: World) {
   const next: Enemy[] = [];
   let bossDied = false;
   for (const e of w.enemies) {
+    if (e.gone) continue;
     if (e.hp <= 0) {
       if (e.kind === "boss") bossDied = true;
       killEnemy(w, e);
@@ -1855,6 +1869,15 @@ function reap(w: World) {
   }
   w.enemies = next;
   if (bossDied) {
+    // the boss's helpers go down with it, so the fight always ends
+    for (const e of w.enemies) {
+      const pal = chapterOf(Math.max(1, e.ch * 10 + 1));
+      burst(w, e.x, e.y, pal.edge, 8, 160, true);
+      ring(w, e.x, e.y, pal.edge, 0.2, e.r, 1.1);
+    }
+    w.enemies = [];
+    w.spawns = [];
+    w.bullets = w.bullets.filter((b) => b.friendly);
     w.bossUp = false;
     w.banner = "LOOT";
     w.bannerT = 1.4;
@@ -1948,10 +1971,31 @@ function moveEnemy(w: World, e: Enemy, dt: number) {
   e.t += dt;
   if (e.motion === "boss") {
     const nest = Math.min(WORLD_H * 0.18, 132);
-    const ch = e.ch;
+    if (e.dash !== undefined) {
+      // charge: 0.9 s warning line, dive at the marked lane, climb back to the nest
+      e.dash += dt;
+      const tx = e.dashX ?? e.x;
+      const low = WORLD_H * 0.72;
+      if (e.dash < DASH_WARN) {
+        // hold still while the warning line shows
+      } else if (e.dash < DASH_WARN + 2) {
+        e.x += clamp(tx - e.x, -420 * dt, 420 * dt);
+        e.y = Math.min(low, e.y + 420 * dt);
+        if (e.y >= low) e.dash = DASH_WARN + 2;
+      } else {
+        e.y = Math.max(nest, e.y - 220 * dt);
+        if (e.y <= nest) {
+          e.dash = undefined;
+          e.dashX = undefined;
+        }
+      }
+      return;
+    }
     e.y += e.y < nest ? 52 * dt : 0;
     if (e.y > nest) e.y = nest + Math.sin(e.t * 1.4) * 4;
-    e.x = clamp(WORLD_W / 2 + Math.sin(e.t * 0.55) * Math.min(120, WORLD_W * 0.12), edgeOf("boss"), WORLD_W - edgeOf("boss"));
+    const want = clamp(WORLD_W / 2 + Math.sin(e.t * 0.55) * Math.min(120, WORLD_W * 0.12), edgeOf("boss"), WORLD_W - edgeOf("boss"));
+    // ease back after a charge instead of snapping across the screen
+    e.x += (want - e.x) * Math.min(1, 3 * dt);
     const ratio = e.hp / e.max;
     const phase = phaseIndex(e.ch, ratio);
     if (phase !== e.mark) {
@@ -2007,7 +2051,7 @@ function moveEnemy(w: World, e: Enemy, dt: number) {
   if (e.motion === "conga" || e.motion === "rain" || e.role === "bonus") {
     e.y += (e.motion === "rain" ? 200 : 130) * dt;
     e.x += Math.sin(e.t * 2 + e.spin) * 40 * dt;
-    if (e.y > WORLD_H + 40) e.hp = 0;
+    if (e.y > WORLD_H + 40) e.gone = true;
     return;
   }
   if (e.motion === "dive") {
@@ -2101,6 +2145,8 @@ function stepHazards(w: World, dt: number) {
   }
 }
 
+export const DASH_WARN = 0.9;
+
 function edgeOf(kind: Kind) {
   if (kind === "boss") return Math.min(96, Math.max(64, WORLD_W * 0.1));
   if (kind === "cruiser") return Math.min(72, Math.max(44, WORLD_W * 0.07));
@@ -2112,6 +2158,11 @@ function bodyClearance(kind: Kind) {
   if (kind === "cruiser") return 40;
   if (kind === "wedge") return 30;
   return 24;
+}
+
+/** Rock Hermit hides in its shell 1 s, then stays out 2 s, on a loop. */
+export function hermitHidden(e: Enemy) {
+  return e.role === "hermit" && (e.t + e.spin) % 3 < 1;
 }
 
 function contain(e: Enemy) {
@@ -2239,9 +2290,12 @@ export function step(w: World, dt: number, input: InputState) {
         runBoss(w, e);
         e.fire = Math.max(0.7, 1.5 - e.mark * 0.2);
       }
-    } else if (e.warn > 0) {
-      e.warn -= dt;
-      if (e.warn <= 0) releaseShot(w, e);
+    } else {
+      if (e.fire > 0) e.fire = Math.max(0, e.fire - dt);
+      if (e.warn > 0) {
+        e.warn -= dt;
+        if (e.warn <= 0) releaseShot(w, e);
+      }
     }
   }
   if (w.freeze <= 0) budgetShots(w, dt);
@@ -2272,13 +2326,13 @@ export function step(w: World, dt: number, input: InputState) {
     if (!b.friendly && b.shape === 5 && !b.split && b.y > WORLD_H * 0.45) {
       b.split = true;
       b.life = 0;
-      for (const a of [-0.4, 0, 0.4]) pushHostile(w, b.x, b.y, Math.PI / 2 + a, 90, 4, 5);
+      for (const a of [-0.4, 0, 0.4]) pushHostile(w, b.x, b.y, Math.PI / 2 + a, 90, 4, 5, true);
     }
     if (!b.friendly && b.shape === 9 && !b.split && (b.age ?? 0) > 1) {
       b.split = true;
       b.life = 0;
-      pushHostile(w, b.x - 8, b.y, Math.PI / 2 - 0.2, 80, 4, 9);
-      pushHostile(w, b.x + 8, b.y, Math.PI / 2 + 0.2, 80, 4, 9);
+      pushHostile(w, b.x - 8, b.y, Math.PI / 2 - 0.2, 80, 4, 9, true);
+      pushHostile(w, b.x + 8, b.y, Math.PI / 2 + 0.2, 80, 4, 9, true);
     }
     const well = w.hazards.find((h) => h.kind === "well");
     if (well) {
@@ -2315,8 +2369,9 @@ export function step(w: World, dt: number, input: InputState) {
           if (e.plate <= 0) float(w, e.x, e.y - 16, "PLATE OFF");
           break;
         }
-        if (e.role === "hermit" && e.hide > 0.4) {
-          b.vy = Math.abs(b.vy);
+        if (hermitHidden(e)) {
+          b.life = 0;
+          sparkHit(w, e, b.x, b.y);
           break;
         }
         if (e.role === "ghost" && Math.sin(e.t * 2.4) < 0) continue;
@@ -2421,7 +2476,7 @@ function finishLevel(w: World) {
   if (w.perfect && w.arcade) w.score += 5000;
   if (fast) {
     const tip = 40 + w.level * 2;
-    w.score += tip;
+    bank(w, tip, WORLD_W / 2, 120, false);
     float(w, WORLD_W / 2, 120, `FAST KILL +$${tip}`, true);
   }
   if (noBomb) w.banner = "NO BOMB";

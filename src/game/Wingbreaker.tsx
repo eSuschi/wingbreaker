@@ -549,7 +549,10 @@ export function Wingbreaker() {
         else if (cue === "hit") sfx.armor();
         else if (cue === "graze") sfx.graze();
         else if (cue === "pickup") sfx.pickup();
-        else if (cue === "hurt") sfx.hurt();
+        else if (cue === "hurt") {
+          sfx.hurt();
+          music.duck();
+        }
         else if (cue === "shield") sfx.shield();
         else if (cue === "bomb") {
           sfx.bomb();
@@ -561,7 +564,6 @@ export function Wingbreaker() {
         else if (cue === "drive") sfx.drive();
         else if (cue === "missile") sfx.missile();
         else if (cue === "plink") sfx.plink(plinkN++);
-        else if (cue === "hurt") music.duck();
       }
       world.cues.length = 0;
       if (big) sfx.kill(true);
@@ -659,7 +661,7 @@ export function Wingbreaker() {
         <div className="absolute inset-0 z-20 overflow-y-auto">
           <div className="mx-auto flex w-[min(92vw,420px)] flex-col gap-2 px-5 pt-16 pb-16">
             <p className="font-display text-sm tracking-[0.42em] text-muted">VERTICAL SORTIE</p>
-            <h1 className="font-display pr-16 text-5xl font-semibold tracking-wide text-ink sm:text-6xl">WINGBREAKER</h1>
+            <h1 className="font-display text-[2.6rem] leading-none font-semibold tracking-wide text-ink sm:pr-16 sm:text-6xl">WINGBREAKER</h1>
             <div className="my-3 h-px w-16 bg-ember" />
             <p className="text-sm text-muted">
               Level {String(ui.mission).padStart(3, "0")} · {ui.nextChapter}
@@ -671,16 +673,18 @@ export function Wingbreaker() {
               <button
                 type="button"
                 className={row}
-                onClick={() => setPick(true)}
+                onClick={() => (touch ? act((w) => chooseCrew(w, "solo")) : setPick(true))}
               >
                 <span>{ui.hasSave ? "CONTINUE" : "CAMPAIGN"}</span>
                 <span className="text-sm text-muted">
                   {String(ui.mission).padStart(3, "0")} · {ui.nextChapter}
                 </span>
               </button>
-              <button type="button" className="self-start text-xs tracking-[0.16em] text-muted underline" onClick={() => setPick(true)}>
-                change
-              </button>
+              {!touch && (
+                <button type="button" className="self-start text-xs tracking-[0.16em] text-muted underline" onClick={() => setPick(true)}>
+                  change
+                </button>
+              )}
               <button type="button" className={row} onClick={() => act((w) => openMode(w, "levels"))}>
                 <span>LEVELS</span>
                 <span className="text-sm text-muted">STARS</span>
@@ -691,7 +695,7 @@ export function Wingbreaker() {
               </button>
               <button type="button" className={row} onClick={() => act((w) => startArcade(w, true))}>
                 <span>DAILY SORTIE</span>
-                <span className="text-sm text-muted">{ui.dailyPlayed ? "TRAINING" : "ONE OFFICIAL"}</span>
+                <span className="text-xs text-muted sm:text-sm">{ui.dailyPlayed ? "TRAINING" : "ONE OFFICIAL"}</span>
               </button>
               <button type="button" className={row} onClick={() => act((w) => openMode(w, "ranks"))}>
                 <span>RANKS</span>
@@ -1142,6 +1146,24 @@ export function Wingbreaker() {
             </button>
           </div>
         </div>
+      )}
+
+      {touch && ui.mode === "play" && (
+        <button
+          type="button"
+          aria-label="Pause"
+          onPointerDown={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            act((w) => {
+              w.mode = "pause";
+            });
+          }}
+          className="absolute top-14 right-4 z-30 flex h-10 w-10 items-center justify-center rounded-full border border-line bg-bg font-display text-sm text-ink"
+          style={{ opacity: 0.6 }}
+        >
+          II
+        </button>
       )}
 
       {touch && ui.mode === "play" && (
