@@ -1,8 +1,6 @@
 import {
   LEVELS,
   FAUNA,
-  bossHp,
-  bulletScale,
   buySkin,
   buyUpgrade,
   buyGun,
@@ -25,7 +23,7 @@ import {
 import {
   BOMB_LINES,
   BOSS_LINES,
-  CREDITS,
+  HONEY_RING,
   DEATH,
   FAMILIES,
   LAST_WORDS,
@@ -35,8 +33,11 @@ import {
   daySeed,
   enemyBody,
   extraLifeAt,
+  aimedShare,
   fastKillLimit,
   fireBudget,
+  sizeMul,
+  volleySize,
   mayShoot,
   phaseIndex,
   planHazards,
@@ -80,6 +81,8 @@ export type Bullet = {
   age?: number;
   bounces?: number;
   split?: boolean;
+  /** enemies a piercing shot already passed through, so each is hit once */
+  hit?: Enemy[];
 };
 
 export type Enemy = {
@@ -108,6 +111,8 @@ export type Enemy = {
   warn: number;
   plate: number;
   hide: number;
+  /** draw and hit scale picked at spawn from the screen width */
+  size?: number;
   /** true when the enemy left the screen alive: removed without a kill or rewards */
   gone?: boolean;
   /** boss charge timer (seconds into the charge), undefined when not charging */
@@ -909,191 +914,16 @@ function grant(list: Spawn[], level: number) {
   if (slot === 2 || slot === 5 || slot === 8) give("W");
   else if (slot === 4 || slot === 9) give("S");
   else if (slot === 6) give("B");
-  give("$", 16 + level * 3, "dart");
-}
-
-function layout(n: number): Spawn[] {
-  const slot = ((n - 1) % 10) + 1;
-  const ch = Math.floor((n - 1) / 10);
-  const out: Spawn[] = [];
-  const H = WORLD_H;
-  const dartCols = Math.min(Math.round(WORLD_W / 108), 6 + Math.floor(ch / 2) + (slot >= 8 ? 1 : 0));
-  const cols = Math.max(5, dartCols);
-  const rank = (at: number, kind: Kind, motion: Motion, count: number, oy: number, inset = Math.max(78, WORLD_W * 0.1)) => {
-    pushRow(out, at, kind, motion, count, inset, oy);
-  };
-
-  if (slot === 1) {
-    if (ch === 0) {
-      const tight = Math.max(36, WORLD_W * 0.08);
-      rank(0.02, "dart", "rank", thick(cols), H * 0.1, tight);
-      rank(0.14, "dart", "zigzag", thick(Math.max(4, cols - 1)), H * 0.2, tight);
-      rank(0.26, "wedge", "rank", Math.max(5, thick(cols) - 2), H * 0.3, tight);
-      pocket(out, 0.34, H * 0.15, "spiral", ["drone", "wedge", "dart"]);
-    } else {
-      rank(0.05, "dart", "rank", cols, H * 0.12);
-      rank(0.55, "dart", "rank", Math.max(4, cols - 1), H * 0.24);
-    }
-  } else if (slot === 2) {
-    if (ch === 0) {
-      const tight = Math.max(36, WORLD_W * 0.08);
-      rank(0.02, "dart", "rank", thick(cols), H * 0.1, tight);
-      rank(0.14, "wedge", "spiral", thick(Math.max(4, cols - 2)), H * 0.2, tight);
-      rank(0.26, "dart", "zigzag", thick(Math.max(4, cols - 1)), H * 0.3, tight);
-      pocket(out, 0.36, H * 0.16, "zigzag", ["drone", "dart", "wedge"]);
-    } else {
-      rank(0.05, "dart", "rank", cols, H * 0.12);
-      rank(0.7, "wedge", "rank", Math.max(4, cols - 2), H * 0.26);
-    }
-  } else if (slot === 3) {
-    const gap = clamp(WORLD_W * 0.14, 70, 180);
-    if (ch === 0) {
-      const tight = Math.max(36, WORLD_W * 0.08);
-      for (let i = 0; i < 3; i++) {
-        out.push({
-          at: 0.04 + i * 0.1,
-          kind: i === 1 ? "drone" : "wedge",
-          x: WORLD_W / 2 - gap,
-          motion: i % 2 ? "spiral" : "sine",
-          spin: i,
-          oy: H * 0.14,
-        });
-        out.push({
-          at: 0.04 + i * 0.1,
-          kind: i === 2 ? "dart" : "wedge",
-          x: WORLD_W / 2 + gap,
-          motion: i % 2 ? "zigzag" : "sine",
-          spin: i + 1,
-          oy: H * 0.14,
-        });
-      }
-      out.push({ at: 0.1, kind: "drone", x: WORLD_W / 2, motion: "spiral", oy: H * 0.24 });
-      pocket(out, 0.22, H * 0.28, "zigzag", ["dart", "wedge", "dart"]);
-      rank(0.38, "dart", "rank", thick(Math.max(5, cols - 1)), H * 0.34, tight);
-    } else {
-      const mids = 1 + Math.min(3, Math.floor(ch / 2));
-      for (let i = 0; i < mids; i++) {
-        out.push({ at: 0.12 + i * 0.18, kind: "wedge", x: WORLD_W / 2 - gap, motion: "sine", spin: i, oy: H * 0.16 });
-        out.push({ at: 0.12 + i * 0.18, kind: "wedge", x: WORLD_W / 2 + gap, motion: "sine", spin: i + 1, oy: H * 0.16 });
-      }
-      out.push({ at: 0.2, kind: "wedge", x: WORLD_W / 2, motion: "sine", oy: H * 0.28 });
-      rank(0.85, "dart", "rank", Math.max(5, cols - 1), H * 0.36);
-    }
-  } else if (slot === 4) {
-    const count = Math.min(14, 7 + ch);
-    for (let i = 0; i < count; i++) {
-      out.push({
-        at: 0.08 + (i % 5) * 0.16,
-        kind: i % 3 === 0 ? "wedge" : "dart",
-        x: 90 + (i / Math.max(1, count - 1)) * (WORLD_W - 180),
-        motion: "swoop",
-        spin: i,
-        oy: H * (0.14 + (i % 3) * 0.07),
-      });
-    }
-  } else if (slot === 5) {
-    out.push({ at: 0.15, kind: "cruiser", x: WORLD_W * 0.28, motion: "hold", oy: H * 0.15 });
-    out.push({ at: 0.15, kind: "cruiser", x: WORLD_W * 0.72, motion: "hold", oy: H * 0.15 });
-    if (ch >= 5) out.push({ at: 0.4, kind: "cruiser", x: WORLD_W * 0.5, motion: "hold", oy: H * 0.28 });
-    rank(0.7, "dart", "rank", cols, H * 0.34);
-  } else if (slot === 6) {
-    const nP = Math.min(8, 4 + Math.floor(ch / 2));
-    for (let i = 0; i < nP; i++) {
-      const left = i % 2 === 0;
-      out.push({
-        at: 0.12 + i * 0.22,
-        kind: i % 3 === 2 ? "drone" : "wedge",
-        x: left ? Math.max(64, WORLD_W * 0.08) : WORLD_W - Math.max(64, WORLD_W * 0.08),
-        motion: "pincer",
-        vx: left ? 140 : -140,
-        oy: H * (0.16 + (i % 3) * 0.08),
-      });
-    }
-    rank(0.4, "dart", "rank", Math.max(5, cols - 1), H * 0.18);
-  } else if (slot === 7) {
-    const drones = Math.min(8, 4 + Math.floor(ch / 2));
-    for (let i = 0; i < drones; i++) {
-      out.push({
-        at: 0.1 + i * 0.16,
-        kind: "drone",
-        x: 70 + (i / Math.max(1, drones - 1)) * (WORLD_W - 140),
-        motion: "sine",
-        oy: H * 0.2,
-        spin: i,
-      });
-    }
-    rank(0.85, "wedge", "rank", Math.max(4, cols - 2), H * 0.34);
-  } else if (slot === 8) {
-    out.push({ at: 0.1, kind: "cruiser", x: WORLD_W * 0.22, motion: "hold", oy: H * 0.14 });
-    out.push({ at: 0.1, kind: "cruiser", x: WORLD_W * 0.78, motion: "hold", oy: H * 0.14 });
-    const count = Math.min(12, 6 + Math.floor(ch / 2));
-    for (let i = 0; i < count; i++) {
-      out.push({
-        at: 0.35 + (i % 4) * 0.14,
-        kind: i % 2 ? "wedge" : "dart",
-        x: 50 + (i / Math.max(1, count - 1)) * (WORLD_W - 100),
-        motion: "swoop",
-        spin: i * 0.7,
-        oy: H * (0.22 + (i % 2) * 0.1),
-      });
-    }
-  } else {
-    rank(0.05, "dart", "rank", cols, H * 0.11);
-    rank(0.45, "wedge", "sine", Math.max(4, cols - 2), H * 0.22);
-    out.push({ at: 0.3, kind: "cruiser", x: WORLD_W * 0.32, motion: "hold", oy: H * 0.16 });
-    out.push({ at: 0.3, kind: "cruiser", x: WORLD_W * 0.68, motion: "hold", oy: H * 0.16 });
-    const drones = Math.min(6, 3 + Math.floor(ch / 3));
-    for (let i = 0; i < drones; i++) {
-      out.push({
-        at: 0.9 + i * 0.18,
-        kind: "drone",
-        x: WORLD_W * (0.2 + (i / Math.max(1, drones - 1)) * 0.6),
-        motion: "sine",
-        oy: H * 0.36,
-      });
-    }
-    if (ch >= 4) {
-      out.push({ at: 1.2, kind: "wedge", x: Math.max(64, WORLD_W * 0.08), motion: "pincer", vx: 120, oy: H * 0.3 });
-      out.push({ at: 1.2, kind: "wedge", x: WORLD_W - Math.max(64, WORLD_W * 0.08), motion: "pincer", vx: -120, oy: H * 0.3 });
-    }
-  }
-  return out;
-}
-
-function pushRow(out: Spawn[], at: number, kind: Kind, motion: Motion, cols: number, inset: number, oy: number) {
-  const span = WORLD_W - inset * 2;
-  for (let i = 0; i < cols; i++) {
-    const x = cols === 1 ? WORLD_W / 2 : inset + (span * i) / (cols - 1);
-    out.push({ at, kind, x, motion, spin: i * 0.45, oy });
-  }
-}
-
-function thick(n: number) {
-  const cap = WORLD_W < 480 ? 6 : 9;
-  const floor = WORLD_W < 480 ? 4 : 5;
-  return Math.min(cap, Math.max(floor, Math.round(n * 1.42)));
-}
-
-function pocket(out: Spawn[], at: number, oy: number, motion: Motion, kinds: Kind[]) {
-  const spots = [0.22, 0.5, 0.78];
-  kinds.forEach((kind, i) => {
-    out.push({
-      at: at + i * 0.07,
-      kind,
-      x: WORLD_W * spots[i % spots.length],
-      motion,
-      spin: i * 0.9,
-      oy,
-    });
-  });
+  give("$", 8 + Math.round(level * 0.6), "dart");
 }
 
 function spawnEnemy(w: World, kind: Kind, x: number, motion: Motion, drop?: PickupKind, y = -28, vx = 0, spin?: number, oy?: number, value = 0, role = "") {
   const level = Math.max(1, w.level);
   const ch = Math.min(9, Math.floor((level - 1) / 10));
   const body = enemyBody(kind, level);
+  const size = sizeMul(WORLD_W);
   let hp = body.hp;
-  let r = body.r;
+  const r = body.r * size;
   if (role === "wall") hp *= 3;
   // the shell already makes it slow to kill; keep it from becoming a sponge
   if (role === "hermit") hp = Math.max(4, Math.ceil(hp * 0.6));
@@ -1130,6 +960,7 @@ function spawnEnemy(w: World, kind: Kind, x: number, motion: Motion, drop?: Pick
     warn: 0,
     plate: role === "forge" ? 12 : 0,
     hide: role === "hermit" ? 1.2 : 0,
+    size,
   });
   w.born += 1;
   const id = role || kind;
@@ -1259,7 +1090,7 @@ function killEnemy(w: World, e: Enemy) {
     return;
   }
   const body = enemyBody(e.kind, w.level);
-  bank(w, e.role === "bonus" ? 2 : body.cash, e.x, e.y, e.kind === "cruiser");
+  bank(w, e.role === "bonus" ? 1 : body.cash, e.x, e.y, e.kind === "cruiser");
   w.slain += 1;
   const snacks = e.kind === "cruiser" ? 5 : w.rng() < 0.35 ? 1 : 0;
   for (let i = 0; i < snacks; i++) dropPickup(w, "N", e.x + (i - 1) * 6, e.y, 1);
@@ -1277,17 +1108,19 @@ function killEnemy(w: World, e: Enemy) {
     dropPickup(w, e.drop, e.x, e.y, e.dropValue);
   } else {
     const base = e.kind === "cruiser" ? 0.28 : e.kind === "wedge" ? 0.16 : e.kind === "drone" ? 0.13 : 0.11;
-    const chance = Math.min(0.48, base * luckMul(w.meta.upgrades.luck));
+    // late formations are three times the size, so each enemy drops less often
+    const thin = 1 - 0.5 * Math.min(1, (w.level - 1) / 99);
+    const chance = Math.min(0.48, base * thin * luckMul(w.arcade ? 0 : w.meta.upgrades.luck));
     if (w.rng() < chance) {
       const roll = w.rng();
       const kind: PickupKind = roll < 0.34 ? "$" : roll < 0.56 ? "W" : roll < 0.72 ? "M" : roll < 0.86 ? "S" : "B";
-      dropPickup(w, kind, e.x, e.y, kind === "$" ? 12 + w.level : 0);
+      dropPickup(w, kind, e.x, e.y, kind === "$" ? 5 + Math.floor(w.level * 0.3) : 0);
     }
   }
 }
 
 function bossLoot(w: World, e: Enemy) {
-  const base = 28 + w.level * 3;
+  const base = 18 + w.level;
   const items: { kind: PickupKind; value: number }[] = [
     { kind: "$", value: base },
     { kind: "$", value: base + 10 },
@@ -1343,7 +1176,7 @@ function takePickup(w: World, kind: PickupKind, value: number, who: Player = w.p
     float(w, p.x, p.y - 28, "AIR FRESHENER", true);
     cheer(w, p.x, p.y, "#e07a3d");
   } else if (kind === "$") {
-    bank(w, value || 12, p.x, p.y, true);
+    bank(w, value || 6, p.x, p.y, true);
     cheer(w, p.x, p.y, "#d2a84a");
   } else if (kind === "M") {
     p.missiles = Math.min(9, p.missiles + 3);
@@ -1380,7 +1213,9 @@ function takePickup(w: World, kind: PickupKind, value: number, who: Player = w.p
 
 function dropPickup(w: World, kind: PickupKind, x: number, y: number, value = 0) {
   const dir = Math.sign(w.player.x - x) || (w.rng() < 0.5 ? -1 : 1);
-  w.pickups.push({ kind, x, y, vx: dir * (12 + w.rng() * 16), vy: 70 + w.rng() * 40, value, rest: 0 });
+  // a gun gift starts on a random family colour and keeps cycling as it falls
+  const hue = kind === "W" ? Math.floor(w.rng() * 3) : undefined;
+  w.pickups.push({ kind, x, y, vx: dir * (12 + w.rng() * 16), vy: 70 + w.rng() * 40, value: hue ?? value, rest: 0, hue });
 }
 
 function stepPickups(w: World, dt: number) {
@@ -1540,7 +1375,7 @@ function firePlayer(w: World, p: Player, focus: boolean) {
       vy: -640,
       r: 1.6,
       friendly: true,
-      dmg: 0.42 * kick,
+      dmg: 0.35 * kick,
       life: 1.2,
       homing: false,
       grazed: false,
@@ -1584,16 +1419,15 @@ function tryMissile(w: World, p: Player, fire: boolean, dt: number) {
 }
 
 export function podOffsets(time: number, weapon: number) {
-  if (weapon < 4) return [] as { x: number; y: number }[];
+  const pods: { x: number; y: number }[] = [];
   const a = time * 2.5;
-  const pods = [{ x: Math.cos(a) * 28, y: Math.sin(a) * 11 }];
-  if (weapon >= 6) pods.push({ x: Math.cos(a + Math.PI) * 28, y: Math.sin(a + Math.PI) * 11 });
+  for (let i = 0; i < podCount(weapon); i++) pods.push({ x: Math.cos(a + i * Math.PI) * 28, y: Math.sin(a + i * Math.PI) * 11 });
   return pods;
 }
 
 function nearestPilot(w: World, x: number, y: number): Player {
   let best = w.player;
-  let bestD = w.player.alive ? (w.player.x - x) ** 2 + (w.player.y - y) ** 2 : 1e12;
+  const bestD = w.player.alive ? (w.player.x - x) ** 2 + (w.player.y - y) ** 2 : 1e12;
   const wing = w.wing;
   if (wing && wing.alive) {
     const d = (wing.x - x) ** 2 + (wing.y - y) ** 2;
@@ -1606,16 +1440,6 @@ function hostileCount(w: World) {
   let n = 0;
   for (const b of w.bullets) if (!b.friendly && b.life > 0) n += 1;
   return n;
-}
-
-function shotCap(level: number) {
-  if (level < 7) return 0;
-  if (level < 12) return 2;
-  if (level < 20) return 4;
-  if (level < 35) return 7;
-  if (level < 55) return 11;
-  if (level < 75) return 16;
-  return 22;
 }
 
 function pushHostile(w: World, x: number, y: number, a: number, speed: number, r: number, shape: number, child = false) {
@@ -1645,16 +1469,21 @@ function releaseShot(w: World, e: Enemy) {
   const who = nearestPilot(w, e.x, e.y);
   const aim = Math.atan2(who.y - e.y, who.x - e.x);
   const down = Math.PI / 2;
-  const budget = fireBudget(w.level);
+  const budget = fireBudget(w.level, WORLD_W);
   const roll = w.rng();
-  const aimed = w.level >= 7 && (w.level < 21 ? roll < 0.3 : w.level < 61 ? roll < 0.5 : roll < 0.6);
+  const aimed = roll < aimedShare(w.level);
   const angle = aimed ? aim : down;
   const shape = poopShape(e.ch, w.level, w.rng());
   const seenName = ["swirl", "pellets", "swirl", "swirl", "swirl", "frozen", "pebble", "comet", "honeyblob", "slime", "ghostpoop", "chili", "zap", "unicorn", "gold", "diamond", "fart"][shape] ?? "swirl";
   if (!w.meta.seen.includes(seenName)) w.meta.seen.push(seenName);
-  const n = w.level < 21 ? 1 : w.level < 61 ? 1 + (w.rng() < 0.45 ? 1 : 0) : 1 + Math.floor(w.rng() * 3);
+  const n = volleySize(w.level, w.rng(), w.rng());
+  // shots that split later cost more of the shared budget, so chapters whose
+  // signature shot multiplies are not suddenly twice as dense as their neighbours
+  if (shape === 5) w.budget -= 1.2;
+  else if (shape === 9) w.budget -= 0.6;
   if (shape === 1 && w.rng() < 0.35) {
     for (const a of [-0.2, 0, 0.2]) pushHostile(w, e.x, e.y + 10, down + a, budget.speed * 1.3, 4, 1);
+    w.budget -= 0.5;
     return;
   }
   for (let i = 0; i < n; i++) {
@@ -1665,18 +1494,18 @@ function releaseShot(w: World, e: Enemy) {
 }
 
 function budgetShots(w: World, dt: number) {
-  const rules = fireBudget(w.level);
+  const rules = fireBudget(w.level, WORLD_W);
   w.budget += rules.rate * dt;
   if (w.budget < 1 || hostileCount(w) >= rules.cap) return;
   const crew = living(w);
   if (!crew.length) return;
   const who = crew[0];
-  const pool = w.enemies.filter((e, i) => {
+  const pool = w.enemies.filter((e) => {
     if (e.hp <= 0 || e.kind === "boss" || e.warn > 0 || e.fire > 0) return false;
     if (hermitHidden(e)) return false;
     if (e.role === "ghost" && Math.sin(e.t * 2.4) < 0) return false;
-    if (!mayShoot(e.kind, e.role, w.level, i)) return false;
-    return e.y > 20 && e.y < who.y - 140;
+    if (!mayShoot(e.kind, e.role, w.level, e.look)) return false;
+    return e.motion !== "dive" && e.y > 20 && e.y < who.y - 140;
   });
   if (!pool.length) return;
   const e = pool[Math.floor(w.rng() * pool.length)];
@@ -1691,8 +1520,9 @@ function runBoss(w: World, e: Enemy) {
   const cmds = bossScript(e.ch, e.mark, e.t, aim, WORLD_W);
   const special = Math.floor(e.t) % 5 === 0;
   for (const cmd of cmds) {
-    if (cmd.op === "shot") pushHostile(w, e.x, e.y + 16, cmd.a, cmd.speed, cmd.r, cmd.shape);
-    else if (cmd.op === "summon" && special && w.enemies.length < 28) spawnEnemy(w, cmd.kind, cmd.x, "sine", undefined, e.y + 20, 0, undefined, e.y + 30, 0, cmd.role);
+    // boss shots do not split: its rings are dense enough already
+    if (cmd.op === "shot") pushHostile(w, e.x, e.y + 16, cmd.a, cmd.speed, cmd.r, cmd.shape, cmd.shape === 5 || cmd.shape === 9);
+    else if (cmd.op === "summon" && special && w.enemies.length < 5) spawnEnemy(w, cmd.kind, cmd.x, "sine", undefined, e.y + 20, 0, undefined, e.y + 30, 0, cmd.role);
     else if (cmd.op === "banner") {
       e.said = e.said ?? [];
       if (!e.said.includes(cmd.text)) {
@@ -1715,130 +1545,6 @@ function cashBullets(w: World) {
     w.score += 5;
     if (w.rng() < 0.1) dropPickup(w, "$", b.x, b.y, 1);
   }
-}
-
-function enemyShoot(w: World, e: Enemy): number {
-  const lv = w.level;
-  const boss = e.kind === "boss";
-  if (!boss && lv < 7) return 3;
-  if (!boss && hostileCount(w) >= shotCap(lv)) return 0.45;
-  const target = nearestPilot(w, e.x, e.y);
-  if (!target.alive || e.y > target.y - 8) return 0.6;
-  const aim = Math.atan2(target.y - e.y, target.x - e.x);
-  const scale = bulletScale(lv);
-  const shape = boss ? 3 : [0, 1, 2, 4][(e.look + e.ch) % 4];
-  const push = (a: number, speed: number, r = 6.2) => {
-    if (w.bullets.length > 220) return;
-    const rad = Math.max(6, r);
-    w.bullets.push({
-      x: e.x + Math.cos(a) * 6,
-      y: e.y + 12,
-      vx: Math.cos(a) * speed * scale,
-      vy: Math.sin(a) * speed * scale,
-      r: rad,
-      friendly: false,
-      dmg: 1,
-      life: 5.5,
-      homing: false,
-      grazed: false,
-      hot: false,
-      tint: e.ch,
-      shape,
-    });
-  };
-  if (boss) {
-    if (lv < 30) {
-      push(Math.PI / 2, 118, 5.2);
-      if (e.mark >= 1) push(aim, 128, 4.6);
-      return e.mark >= 2 ? 1.7 : 2.4;
-    }
-    if (lv < 60) {
-      push(aim - 0.16, 138, 4.4);
-      push(aim + 0.16, 138, 4.4);
-      if (e.mark >= 2) push(Math.PI / 2, 148, 5.4);
-      return e.mark >= 2 ? 1.25 : 1.7;
-    }
-    bossVolley(e, push, aim);
-    return e.mark >= 2 ? 0.9 : 1.2;
-  }
-  if (lv < 12) {
-    if (e.kind === "dart" || e.kind === "drone") return 2.5;
-    push(Math.PI / 2, 108, 4.6);
-    return 3.6;
-  }
-  if (lv < 22) {
-    if (e.kind === "dart") {
-      if ((Math.round(e.spin * 10) + e.look) % 3 !== 0) return 2.2;
-      push(Math.PI / 2, 118, 4.2);
-      return 3.4;
-    }
-    push(Math.PI / 2 + (e.x < target.x ? 0.12 : -0.12), 128, 4.3);
-    return e.kind === "cruiser" ? 2.8 : 3.2;
-  }
-  if (lv < 40) {
-    if (e.kind === "dart") {
-      push(Math.PI / 2, 132, 4);
-      return 2.5;
-    }
-    if (e.kind === "cruiser") {
-      push(aim, 142, 4.6);
-      push(Math.PI / 2, 128, 4.2);
-      return 2.3;
-    }
-    push(aim, 148, 4);
-    return 2.3;
-  }
-  if (lv < 65) {
-    if (e.kind === "dart") {
-      push(aim * 0.2 + Math.PI / 2, 148, 3.8);
-      return 1.9;
-    }
-    if (e.kind === "wedge") {
-      push(aim - 0.12, 162, 4);
-      push(aim + 0.12, 162, 4);
-      return 2;
-    }
-    if (e.kind === "drone") {
-      push(aim, 168, 3.8);
-      return 1.7;
-    }
-    push(aim, 155, 4.4);
-    push(Math.PI / 2 - 0.22, 140, 3.8);
-    push(Math.PI / 2 + 0.22, 140, 3.8);
-    return 1.8;
-  }
-  if (e.kind === "dart") {
-    push(aim, 168, 3.6);
-    return 1.4;
-  }
-  if (e.kind === "wedge") {
-    push(aim - 0.16, 176, 3.8);
-    push(aim + 0.16, 176, 3.8);
-    return 1.3;
-  }
-  if (e.kind === "drone") {
-    push(aim, 184, 3.6);
-    return 1.2;
-  }
-  push(aim, 166, 4.2);
-  push(Math.PI / 2 - 0.28, 150, 3.6);
-  push(Math.PI / 2 + 0.28, 150, 3.6);
-  return 1.25;
-}
-
-function bossVolley(e: Enemy, push: (a: number, speed: number, r?: number) => void, aim: number) {
-  if (e.mark === 0) {
-    push(aim - 0.2, 150, 4.2);
-    push(aim + 0.2, 150, 4.2);
-    return;
-  }
-  const fast = e.mark >= 2;
-  const sweep = Math.sin(e.t * (fast ? 1.05 : 0.7)) * 0.4;
-  const base = Math.PI / 2 + sweep;
-  const step = fast ? 0.18 : 0.22;
-  const n = fast ? 3 : 2;
-  for (let i = -n; i <= n; i++) push(base + i * step, fast ? 150 : 132, 3.6);
-  if (fast) push(aim, 170, 3.4);
 }
 
 function nearestEnemy(w: World, x: number, y: number): Enemy | null {
@@ -2008,7 +1714,7 @@ function moveEnemy(w: World, e: Enemy, dt: number) {
     }
     return;
   }
-  const cap = WORLD_H * 0.46;
+  const cap = WORLD_H * 0.5;
   const goal = Math.min((e.oy > 0 ? e.oy : WORLD_H * 0.22) + Math.min(WORLD_H * 0.08, e.t * 3), cap);
   if (e.motion === "pincer") {
     if (Math.abs(e.vx) < 20) e.vx = e.ox < WORLD_W / 2 ? 130 : -130;
@@ -2073,12 +1779,15 @@ function moveEnemy(w: World, e: Enemy, dt: number) {
   const sway = Math.sin(e.t * (e.motion === "swoop" ? 1.25 : 0.8) + e.spin) * amp;
   e.x = e.ox + w.formX + sway;
   if ((e.motion === "rank" || e.motion === "swoop") && e.kind !== "boss" && e.role !== "bonus") {
-    const { d } = { d: Math.max(0, (w.level - 4) / 96) };
+    const d = Math.max(0, (w.level - 4) / 96);
     const chance = w.level < 4 ? 0 : 0.1 + 0.25 * d;
     if (w.rng() < chance * dt * 0.15) {
-      e.motion = "dive";
-      e.warn = 0.4;
-      e.flash = 0.4;
+      const divers = w.enemies.reduce((n, o) => n + (o.motion === "dive" ? 1 : 0), 0);
+      if (divers < 1 + Math.floor(w.level / 25) && e.y > 30) {
+        e.motion = "dive";
+        e.warn = 0.55;
+        e.flash = 0.55;
+      }
     }
   }
   contain(e);
@@ -2153,14 +1862,6 @@ function edgeOf(kind: Kind) {
   return Math.min(52, Math.max(28, WORLD_W * 0.05));
 }
 
-function bodyClearance(kind: Kind) {
-  if (kind === "boss") return 72;
-  if (kind === "cruiser") return 40;
-  if (kind === "wedge") return 30;
-  return 24;
-}
-
-/** Rock Hermit hides in its shell 1 s, then stays out 2 s, on a loop. */
 export function hermitHidden(e: Enemy) {
   return e.role === "hermit" && (e.t + e.spin) % 3 < 1;
 }
@@ -2355,6 +2056,7 @@ export function step(w: World, dt: number, input: InputState) {
     if (!b.friendly || b.life <= 0) continue;
     for (const e of w.enemies) {
       if (e.hp <= 0) continue;
+      if (b.hit && b.hit.includes(e)) continue;
       if (Math.hypot(b.x - e.x, b.y - e.y) < e.r + b.r) {
         if (e.role === "wall" && (b.pierce ?? 0) <= 0 && b.style !== 3 && Math.abs(b.x - e.x) < e.r * 0.65) {
           b.vy = Math.abs(b.vy);
@@ -2375,10 +2077,13 @@ export function step(w: World, dt: number, input: InputState) {
           break;
         }
         if (e.role === "ghost" && Math.sin(e.t * 2.4) < 0) continue;
-        if (e.role !== "honey" && e.kind !== "boss" && w.enemies.some((h) => h.role === "honey" && h.hp > 0 && Math.hypot(h.x - e.x, h.y - e.y) < 200)) {
-          b.vy = Math.abs(b.vy);
-          sparkHit(w, e, b.x, b.y);
-          break;
+        if (e.role !== "honey" && e.kind !== "boss" && w.enemies.some((h) => h.role === "honey" && h.hp > 0 && Math.hypot(h.x - e.x, h.y - e.y) < HONEY_RING * (h.size ?? 1))) {
+          // shielded: the shot slips through, so the turret behind can still be reached
+          if (e.flash <= 0) {
+            ring(w, e.x, e.y, "#e2b84a", 0.2, e.r, 1.4);
+            e.flash = 0.25;
+          }
+          continue;
         }
         e.hp -= b.dmg;
         sparkHit(w, e, b.x, b.y);
@@ -2392,7 +2097,7 @@ export function step(w: World, dt: number, input: InputState) {
         const left = b.pierce ?? 0;
         if (left > 0) {
           b.pierce = left - 1;
-          b.y -= e.r + b.r + 3;
+          (b.hit ??= []).push(e);
         } else b.life = 0;
         if (e.kind === "boss" || e.kind === "cruiser") w.cues.push("hit");
         break;
@@ -2484,8 +2189,8 @@ function finishLevel(w: World) {
   if (!boss && slot === 5 && w.born > 0 && w.slain >= w.born) {
     w.banner = `PERFECT! ${w.slain}/${w.born}`;
     w.score += 150;
-    if (w.arcade) w.purse += 75;
-    else w.meta.dollars += 150;
+    if (w.arcade) w.purse += 50;
+    else w.meta.dollars += 100;
     if (w.player.weapon < 6) w.player.weapon += 1;
     else w.player.feed = 6.5;
   } else if (!boss && slot === 5) {

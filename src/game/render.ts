@@ -1,5 +1,5 @@
 import { CHAPTERS, FAUNA, chapterIndex, chapterOf, gunName, skinDef, type SkinDef } from "./meta";
-import { familyColor } from "./v3";
+import { HONEY_RING, familyColor } from "./v3";
 import { drawBossCreature, drawCritter, drawLoot } from "./critters";
 import { DASH_WARN, hermitHidden, podOffsets, WORLD_H, WORLD_W, type Enemy, type Player, type World } from "./world";
 
@@ -212,7 +212,7 @@ function paintHangar(ctx: CanvasRenderingContext2D) {
   if (!hangarImg) {
     hangarImg = new Image();
     hangarImg.onload = () => {
-      hangarImg && (hangarImg.dataset.ready = "1");
+      if (hangarImg) hangarImg.dataset.ready = "1";
     };
     hangarImg.src = "/bg/menu.jpg";
     hangarImg.onerror = () => {
@@ -567,6 +567,16 @@ function poly(ctx: CanvasRenderingContext2D, pts: number[]) {
 function drawEnemy(ctx: CanvasRenderingContext2D, e: Enemy, time: number, px: number, py: number) {
   ctx.save();
   ctx.translate(e.x, e.y);
+  const k = e.size ?? 1;
+  if (e.motion === "dive" && e.warn > 0) {
+    // about to dive at the pilot: a red ring closes in on the critter
+    const left = Math.min(1, e.warn / 0.55);
+    ctx.strokeStyle = `rgba(255,70,90,${0.9 - left * 0.4})`;
+    ctx.lineWidth = 2.5;
+    ctx.beginPath();
+    ctx.arc(0, 0, e.r * (1.2 + left * 1.4), 0, Math.PI * 2);
+    ctx.stroke();
+  }
   if (e.warn > 0) ctx.scale(1.15, 1.15);
   const pal = CHAPTERS[e.ch] ?? CHAPTERS[0];
   const bob = Math.sin(time * 3.2 + e.spin) * 1.6;
@@ -575,10 +585,15 @@ function drawEnemy(ctx: CanvasRenderingContext2D, e: Enemy, time: number, px: nu
     if (face) {
       ctx.shadowColor = "rgba(0,0,0,0.55)";
       ctx.shadowBlur = 14;
-      blitSprite(ctx, face, 108, bob);
+      blitSprite(ctx, face, 108 * k, bob);
       ctx.shadowBlur = 0;
-    } else drawBossCreature(ctx, e.ch, time, e.flash > 0);
-    bar(ctx, 54, -56, e.hp / e.max, pal.accent);
+    } else {
+      ctx.save();
+      ctx.scale(k, k);
+      drawBossCreature(ctx, e.ch, time, e.flash > 0);
+      ctx.restore();
+    }
+    bar(ctx, 54 * k, -56 * k - 4, e.hp / e.max, pal.accent);
     if (e.dash !== undefined && e.dash < DASH_WARN) {
       // charge warning: a pulsing lane from the boss down to where it will dive
       const dx = (e.dashX ?? e.x) - e.x;
@@ -604,11 +619,37 @@ function drawEnemy(ctx: CanvasRenderingContext2D, e: Enemy, time: number, px: nu
     }
   } else {
     const face = faceOf(e.look);
-    const h = e.kind === "cruiser" ? 40 : e.kind === "wedge" ? 32 : e.kind === "drone" ? 28 : 26;
+    const h = (e.kind === "cruiser" ? 40 : e.kind === "wedge" ? 32 : e.kind === "drone" ? 28 : 26) * k;
+    if (e.role === "honey") {
+      // Honey Turret: everything inside the amber ring is immune until it dies
+      const ringR = HONEY_RING * k;
+      ctx.fillStyle = "rgba(226,184,74,0.07)";
+      ctx.beginPath();
+      ctx.arc(0, 0, ringR, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = `rgba(226,184,74,${0.45 + Math.sin(time * 4) * 0.2})`;
+      ctx.lineWidth = 2;
+      ctx.setLineDash([10, 8]);
+      ctx.lineDashOffset = -time * 30;
+      ctx.beginPath();
+      ctx.arc(0, 0, ringR, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.strokeStyle = "#e2b84a";
+      ctx.lineWidth = 2.5;
+      ctx.beginPath();
+      ctx.arc(0, 0, h * 0.75, 0, Math.PI * 2);
+      ctx.stroke();
+    }
     const shell = hermitHidden(e);
     if (shell) ctx.globalAlpha = 0.35;
     if (face) blitSprite(ctx, face, h, bob);
-    else drawCritter(ctx, e.look, e.kind, time, e.spin, e.flash > 0);
+    else {
+      ctx.save();
+      ctx.scale(k, k);
+      drawCritter(ctx, e.look, e.kind, time, e.spin, e.flash > 0);
+      ctx.restore();
+    }
     ctx.globalAlpha = 1;
     if (shell) {
       // Rock Hermit tucked in its shell: shots ping off until it peeks out
@@ -622,7 +663,7 @@ function drawEnemy(ctx: CanvasRenderingContext2D, e: Enemy, time: number, px: nu
       ctx.fillStyle = "#6b6052";
       for (const [ox, oy, r] of [[-6, -4, 4], [7, 2, 5], [-2, 8, 3]] as const) {
         ctx.beginPath();
-        ctx.arc(ox, oy + bob, r, 0, Math.PI * 2);
+        ctx.arc(ox * k, oy * k + bob, r * k, 0, Math.PI * 2);
         ctx.fill();
       }
     }
@@ -662,12 +703,22 @@ function drawBullet(
     else if (style === 1) drawFan(ctx, hot);
     else drawPulse(ctx, r, hot);
   } else {
+    // on a phone the shots are drawn smaller so they do not dwarf the critters
+    if (WORLD_W < 560) ctx.scale(0.8, 0.8);
     if (shape !== 16) {
-      const pulse = 0.45 + Math.sin(y * 0.2) * 0.1;
-      ctx.strokeStyle = `rgba(255,90,110,${pulse})`;
-      ctx.lineWidth = 2;
+      // Anything inside this pink-red halo hurts. The colour is used for
+      // nothing else, and the halo is sized past the sprite so a brown shot
+      // on a brown sky still reads.
+      const body = shape === 2 ? 9 : shape === 3 ? 18 : shape <= 4 ? 14 : Math.max(5.5, r * 1.7) * 1.05;
+      const pulse = 0.5 + Math.sin(y * 0.2) * 0.12;
+      ctx.fillStyle = `rgba(255,60,95,${pulse * 0.45})`;
       ctx.beginPath();
-      ctx.arc(0, 0, Math.max(8, r * 1.7), 0, Math.PI * 2);
+      ctx.arc(0, 0, body + 5, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = `rgba(255,120,140,${0.55 + pulse * 0.4})`;
+      ctx.lineWidth = 1.6;
+      ctx.beginPath();
+      ctx.arc(0, 0, body + 5, 0, Math.PI * 2);
       ctx.stroke();
     }
     if (shape === 2) ctx.rotate(Math.atan2(vy, vx));
@@ -856,44 +907,136 @@ function drawPoop(ctx: CanvasRenderingContext2D, shape: number, s: number, tint:
 function drawPickup(ctx: CanvasRenderingContext2D, kind: string, x: number, y: number, time: number, hue = 0) {
   ctx.save();
   ctx.translate(x, y);
+  if (kind === "N") {
+    // snack: a small glazed donut, no ring, so it never competes with real gifts
+    ctx.rotate(Math.sin(time * 3 + x) * 0.3);
+    ctx.fillStyle = "#c98a4b";
+    ctx.beginPath();
+    ctx.arc(0, 0, 6.5, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = "#f29bb8";
+    ctx.beginPath();
+    ctx.arc(0, -0.6, 5.4, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = "#1a120e";
+    ctx.beginPath();
+    ctx.arc(0, 0, 2, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+    return;
+  }
+  const small = WORLD_W < 560;
+  const ringR = small ? 14 : 17;
   const pulse = 0.55 + Math.sin(time * 6) * 0.28;
   const gift = hue === 1 ? "#9ed24a" : hue === 2 ? "#e07a3d" : "#7eb6d6";
-  ctx.strokeStyle = kind === "W" ? gift : `rgba(255,244,220,${pulse})`;
-  ctx.lineWidth = 1.8;
+  const tone = kind === "W" ? gift : kind === "$" ? "#e2b84a" : kind === "S" ? "#bfe3f5" : kind === "B" ? "#9ed24a" : kind === "D" ? "#f2d24a" : "#e07a3d";
+  ctx.fillStyle = "rgba(7,9,12,0.72)";
   ctx.beginPath();
-  ctx.arc(0, 0, 18 + Math.sin(time * 5) * 2, 0, Math.PI * 2);
-  ctx.stroke();
-  ctx.strokeStyle = "rgba(224,122,61,0.55)";
-  ctx.lineWidth = 1;
+  ctx.arc(0, 0, ringR, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.globalAlpha = kind === "W" ? 1 : 0.55 + pulse * 0.45;
+  ctx.strokeStyle = tone;
+  ctx.lineWidth = kind === "W" ? 2.4 : 1.8;
   ctx.beginPath();
-  ctx.arc(0, 0, 13, 0, Math.PI * 2);
+  ctx.arc(0, 0, ringR + Math.sin(time * 5) * 1.2, 0, Math.PI * 2);
   ctx.stroke();
-  if (kind === "N") {
-    ctx.fillStyle = "#e07a3d";
-    ctx.beginPath();
-    ctx.arc(0, 0, 6, 0, Math.PI * 2);
-    ctx.fill();
-  } else if (kind === "D") {
-    ctx.fillStyle = "#f2d24a";
-    ctx.beginPath();
-    ctx.ellipse(0, 1, 8, 5, 0, 0, Math.PI * 2);
-    ctx.fill();
-  } else if (kind === "S") {
+  ctx.globalAlpha = 1;
+  const z = small ? 0.85 : 1;
+  ctx.scale(z, z);
+  ctx.translate(0, Math.sin(time * 4 + x) * 1.2);
+  if (kind === "W") {
+    // gift box in the colour of the gun family it holds
+    ctx.fillStyle = gift;
+    ctx.fillRect(-8, -4, 16, 12);
+    ctx.fillStyle = "rgba(0,0,0,0.22)";
+    ctx.fillRect(-8, -4, 16, 3);
     ctx.fillStyle = "#f7f4ee";
+    ctx.fillRect(-1.6, -4, 3.2, 12);
+    ctx.fillRect(-8, -0.5, 16, 2.4);
     ctx.beginPath();
-    ctx.arc(0, -1, 6, 0, Math.PI * 2);
+    ctx.ellipse(-3.4, -6.4, 3.4, 2.2, -0.5, 0, Math.PI * 2);
+    ctx.ellipse(3.4, -6.4, 3.4, 2.2, 0.5, 0, Math.PI * 2);
     ctx.fill();
-    ctx.fillRect(-1.5, 3, 3, 6);
+  } else if (kind === "$") {
+    const squash = 0.55 + Math.abs(Math.sin(time * 3 + x)) * 0.45;
+    ctx.scale(squash, 1);
+    ctx.fillStyle = "#e2b84a";
+    ctx.beginPath();
+    ctx.arc(0, 0, 8.5, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = "#8a6230";
+    ctx.lineWidth = 1.4;
+    ctx.stroke();
+    ctx.fillStyle = "#8a6230";
+    ctx.font = "700 11px Barlow Condensed, sans-serif";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText("$", 0, 0.5);
+    ctx.textBaseline = "alphabetic";
+  } else if (kind === "S") {
+    // toilet paper roll
+    ctx.fillStyle = "#f7f4ee";
+    ctx.fillRect(-7, -5, 14, 11);
+    ctx.beginPath();
+    ctx.ellipse(0, -5, 7, 3, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = "#d9d3c8";
+    ctx.beginPath();
+    ctx.ellipse(0, 6, 7, 3, 0, 0, Math.PI);
+    ctx.fill();
+    ctx.fillStyle = "#8a8175";
+    ctx.beginPath();
+    ctx.ellipse(0, -5, 2.6, 1.2, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = "#f7f4ee";
+    ctx.fillRect(5, -1, 4, 9);
   } else if (kind === "B") {
+    // air freshener spray can
     ctx.fillStyle = "#9ed24a";
-    ctx.fillRect(-4, -1, 8, 10);
+    ctx.fillRect(-4.5, -3, 9, 12);
+    ctx.fillStyle = "#f7f4ee";
+    ctx.fillRect(-4.5, 1, 9, 3);
+    ctx.fillStyle = "#d5dbe2";
+    ctx.fillRect(-3, -6, 6, 3);
+    ctx.fillStyle = "#c44536";
+    ctx.fillRect(-1.5, -9, 3, 3);
+    ctx.fillStyle = "rgba(244,251,255,0.8)";
+    for (const [px, py] of [[5, -9], [7.5, -7.5], [7.5, -10.5]] as const) {
+      ctx.beginPath();
+      ctx.arc(px, py, 0.9, 0, Math.PI * 2);
+      ctx.fill();
+    }
   } else if (kind === "M") {
+    // plunger
+    ctx.fillStyle = "#e6d3b0";
+    ctx.fillRect(-1.2, -10, 2.4, 13);
     ctx.fillStyle = "#c44536";
     ctx.beginPath();
-    ctx.ellipse(0, 3, 6, 3, 0, 0, Math.PI * 2);
+    ctx.moveTo(-7, 8);
+    ctx.quadraticCurveTo(-6, 1, 0, 1);
+    ctx.quadraticCurveTo(6, 1, 7, 8);
+    ctx.closePath();
     ctx.fill();
-    ctx.fillStyle = "#e6d3b0";
-    ctx.fillRect(-1, -8, 2, 10);
+  } else if (kind === "D") {
+    // rubber duck
+    ctx.fillStyle = "#f2d24a";
+    ctx.beginPath();
+    ctx.ellipse(-1, 3, 8, 5.5, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(4, -4, 4.4, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = "#e07a3d";
+    ctx.beginPath();
+    ctx.moveTo(7.5, -4.5);
+    ctx.lineTo(11.5, -3.2);
+    ctx.lineTo(7.5, -2);
+    ctx.closePath();
+    ctx.fill();
+    ctx.fillStyle = "#1a120e";
+    ctx.beginPath();
+    ctx.arc(5, -5, 0.9, 0, Math.PI * 2);
+    ctx.fill();
   } else drawLoot(ctx, kind, time, x);
   ctx.restore();
 }

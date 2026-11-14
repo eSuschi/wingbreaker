@@ -57,41 +57,76 @@ export function diff(level: number) {
   return { lv, d, ch, k };
 }
 
+/** Enemies are drawn and hit larger on wide screens, where 26 px critters looked lost. */
+export function sizeMul(width: number) {
+  return Math.max(1, Math.min(1.5, width / 800));
+}
+
 export function enemyBody(kind: VKind, level: number) {
   const { lv } = diff(level);
-  if (kind === "dart") return { hp: 1 + Math.floor(lv / 34), r: 11, score: 70 + lv, vy: 90, cash: 3 + Math.floor(lv / 10) };
-  if (kind === "drone") return { hp: 2 + Math.floor(lv / 22), r: 12, score: 110 + lv * 2, vy: 84, cash: 5 + Math.floor(lv / 10) };
-  if (kind === "wedge") return { hp: 2 + Math.floor(lv / 15), r: 13, score: 130 + lv * 2, vy: 72, cash: 5 + Math.floor(lv / 10) };
-  if (kind === "cruiser") return { hp: 7 + Math.floor(lv / 6), r: 16, score: 260 + lv * 3, vy: 48, cash: 12 + Math.floor(lv / 10) };
-  const hp = Math.round((420 + lv * 18 + (lv / 10) * (lv / 10) * 28) * (0.85 + lv / 400));
-  return { hp, r: 34, score: 4000 + lv * 40, vy: 46, cash: 40 + lv * 2 };
+  const tip = Math.floor(lv / 34);
+  if (kind === "dart") return { hp: 1 + Math.floor(lv / 34), r: 11, score: 70 + lv, vy: 90, cash: 1 + tip };
+  if (kind === "drone") return { hp: 2 + Math.floor(lv / 22), r: 12, score: 110 + lv * 2, vy: 84, cash: 1 + tip };
+  if (kind === "wedge") return { hp: 2 + Math.floor(lv / 15), r: 13, score: 130 + lv * 2, vy: 72, cash: 2 + tip };
+  if (kind === "cruiser") return { hp: 7 + Math.floor(lv / 6), r: 16, score: 260 + lv * 3, vy: 48, cash: 5 + tip };
+  // Tuned so a typical gun for that point in the campaign clears a boss in
+  // roughly 40 s (level 10) to 90 s (level 100) of steady fire.
+  const hp = Math.round(400 + lv * 9 + lv * lv * 0.12);
+  return { hp, r: 34, score: 4000 + lv * 40, vy: 46, cash: 30 + lv };
 }
 
-export function fireBudget(level: number) {
+/**
+ * Shared fire budget for the whole formation: `rate` volleys a second, never
+ * more than `cap` hostile shots on screen, each shooter resting cdMin..cdMax.
+ */
+export function fireBudget(level: number, width = 700) {
   const { d, lv } = diff(level);
-  const cap = Math.round(6 + 54 * Math.pow(d, 0.85));
-  const rate = 0.8 + 5.2 * Math.pow(d, 0.9);
-  const cd = 2.5 + (4 - 2.5) * 0; // placeholder
+  // A wide screen spreads the same shots over far more sky, so the budget
+  // follows the width: a phone gets fewer shots than a desktop for the same
+  // pressure on the pilot.
+  const wide = Math.max(0.75, Math.min(1.55, width / 700));
+  // the first five levels ease in, from about two thirds of the normal fire
+  const ease = lv >= 5 ? 1 : 0.55 + 0.09 * lv;
+  const cap = Math.round((8 + 52 * Math.pow(d, 0.85)) * wide * ease);
+  const rate = (1.2 + 4.8 * Math.pow(d, 0.9)) * wide * ease;
   const slow = 2.5 - (2.5 - 0.9) * Math.pow(d, 0.85);
   const fast = 4 - (4 - 1.4) * Math.pow(d, 0.85);
-  const speed = 100 + 110 * d;
-  return { cap: lv >= 100 ? 60 : cap, rate, cdMin: slow, cdMax: Math.max(slow + 0.2, fast), speed };
+  const speed = 130 + 110 * d;
+  return { cap, rate, cdMin: slow, cdMax: Math.max(slow + 0.2, fast), speed };
 }
 
-export function mayShoot(kind: string, role: string, level: number, index: number) {
+/** Share of shots aimed at the pilot instead of dropped straight down. */
+export function aimedShare(level: number) {
+  const { d, lv } = diff(level);
+  return lv < 4 ? 0 : Math.min(0.6, 0.15 + 0.45 * d);
+}
+
+/** How many shots one volley holds: 1 early, up to 3 late, with no sudden steps. */
+export function volleySize(level: number, rollA: number, rollB: number) {
+  const { lv } = diff(level);
+  const second = Math.max(0, Math.min(0.7, (lv - 15) / 50));
+  const third = Math.max(0, Math.min(0.5, (lv - 55) / 60));
+  return 1 + (rollA < second ? 1 : 0) + (rollB < third ? 1 : 0);
+}
+
+export function mayShoot(kind: string, role: string, level: number, id: number) {
   if (role === "bonus" || role === "chip" || role === "rain" || role === "spore") return false;
   const { lv } = diff(level);
-  if (lv <= 3) return kind === "wedge" || kind === "cruiser";
-  if (lv <= 6) return kind === "wedge" || kind === "cruiser" || (kind === "dart" && index % 4 === 0);
+  // the first levels teach dodging: only some of the formation fires
+  if (lv <= 3) return kind === "wedge" || kind === "cruiser" || id % 3 === 0;
+  if (lv <= 6) return kind !== "dart" || id % 2 === 0;
   return true;
 }
 
 export function clearCash(level: number, perfect: boolean, noBomb: boolean, salvage: number, replay: boolean) {
-  let n = (20 + level * 2) * (perfect ? 1.5 : 1) * (noBomb ? 1.2 : 1);
+  let n = (12 + level * 0.8) * (perfect ? 1.5 : 1) * (noBomb ? 1.2 : 1);
   n *= 1 + salvage * 0.15;
   if (replay) n *= 0.5;
   return Math.round(n);
 }
+
+/** Radius of a Honey Turret's shield ring, before the screen-size scale. */
+export const HONEY_RING = 130;
 
 export function screenCap(width: number) {
   return Math.max(12, Math.min(40, Math.round(width / 32)));
@@ -141,8 +176,8 @@ export function extraLifeAt(score: number, paid: number) {
 
 const DENSITY = [0.85, 0.9, 0.95, 1, 1, 1.05, 1.1, 1.15, 1.3];
 
-function pushGrid(out: VSpawn[], at: number, n: number, kind: VKind, role: string, W: number, H: number, motion: string) {
-  const cols = Math.max(4, Math.min(8, Math.round(W / 90)));
+function pushGrid(out: VSpawn[], at: number, n: number, kind: VKind, role: string, W: number, H: number, motion: string, base: number) {
+  const cols = Math.max(4, Math.min(10, Math.round(W / (72 * sizeMul(W)))));
   const rows = Math.ceil(n / cols);
   let i = 0;
   for (let r = 0; r < rows; r++) {
@@ -151,7 +186,7 @@ function pushGrid(out: VSpawn[], at: number, n: number, kind: VKind, role: strin
     const x0 = (W - span) / 2;
     for (let c = 0; c < count; c++) {
       const x = count === 1 ? W / 2 : x0 + (span * c) / (count - 1);
-      out.push({ at: at + r * 0.35, kind, x, motion, role, oy: H * (0.1 + r * 0.08), spin: i });
+      out.push({ at: at + r * 0.35, kind, x, motion, role, oy: base + H * r * 0.062, spin: i });
       i += 1;
     }
   }
@@ -189,9 +224,14 @@ export function planLevel(level: number, W: number, H: number, seed: number) {
     const form = forms[Math.floor(rng() * (ch === 0 && k < 4 ? 4 : forms.length))] ?? "grid";
     const at = wave * 2.1;
     const special = chapterRole(ch, k, wave);
+    // The first wave settles lowest and later waves stack above it, so the
+    // formations fill the upper half of the screen instead of one thin strip.
+    const base = H * (0.09 + 0.085 * (waves - 1 - wave));
     if (form === "grid" || form === "wall") {
-      pushGrid(out, at, n, wave === 0 ? "dart" : "wedge", form === "wall" && wave === 0 ? "wall" : special, W, H, "rank");
+      pushGrid(out, at, n, wave === 0 ? "dart" : "wedge", form === "wall" && wave === 0 ? "wall" : special, W, H, "rank", base);
     } else if (form === "vwing") {
+      const deep = Math.max(1, Math.floor((n - 1) / 2));
+      const stepY = Math.min(H * 0.03, (H * 0.2) / deep);
       for (let i = 0; i < n; i++) {
         const side = i % 2 ? 1 : -1;
         const row = Math.floor(i / 2);
@@ -201,7 +241,8 @@ export function planLevel(level: number, W: number, H: number, seed: number) {
           x: W / 2 + side * (28 + row * Math.min(36, W * 0.04)),
           motion: "sine",
           role: i === 0 ? special : "",
-          oy: H * 0.12,
+          // a real V: the tip flies lowest, the wings trail up and out
+          oy: base + (deep - row) * stepY,
           spin: i,
         });
       }
@@ -215,7 +256,7 @@ export function planLevel(level: number, W: number, H: number, seed: number) {
           x: W / 2 + Math.cos(a) * Math.min(W * 0.28, 160),
           motion: "spiral",
           role: special,
-          oy: H * 0.2,
+          oy: base + H * 0.07 + Math.sin(a) * H * 0.065,
           spin: a,
         });
       }
@@ -240,20 +281,23 @@ export function planLevel(level: number, W: number, H: number, seed: number) {
           x: left ? W * 0.08 : W * 0.92,
           motion: "pincer",
           role: special,
-          oy: H * (0.14 + (i % 3) * 0.06),
+          oy: base + H * (i % 3) * 0.06,
           vx: left ? 140 : -140,
         });
       }
     } else if (form === "escort") {
-      out.push({ at, kind: "cruiser", x: W / 2, motion: "hold", role: special, oy: H * 0.16 });
-      for (let i = 0; i < Math.max(0, n - 1); i++) {
+      out.push({ at, kind: "cruiser", x: W / 2, motion: "hold", role: special, oy: base + H * 0.07 });
+      const guards = Math.max(0, n - 1);
+      for (let i = 0; i < guards; i++) {
+        const a = (i / Math.max(1, guards)) * Math.PI * 2;
+        const ringR = i % 2 ? 84 : 58;
         out.push({
           at,
           kind: "dart",
-          x: W / 2 + Math.cos(i) * 70,
+          x: W / 2 + Math.cos(a) * ringR * 1.5,
           motion: "spiral",
           role: "",
-          oy: H * 0.16,
+          oy: base + H * 0.07 + Math.sin(a) * ringR * 0.75,
           spin: i,
         });
       }
@@ -265,7 +309,7 @@ export function planLevel(level: number, W: number, H: number, seed: number) {
           x: 40 + (i / Math.max(1, n - 1)) * (W - 80),
           motion: "swoop",
           role: special,
-          oy: H * (0.12 + (i % 3) * 0.07),
+          oy: base + H * (i % 3) * 0.07,
           spin: i,
         });
       }
@@ -273,6 +317,20 @@ export function planLevel(level: number, W: number, H: number, seed: number) {
   }
   if (ch >= 2 && k >= 6) {
     out.push({ at: 1.2, kind: "cruiser", x: W * 0.3, motion: "hold", role: "hermit", oy: H * 0.18 });
+  }
+  // One Honey Turret per level, not a whole wave of them: it shields what is
+  // inside its ring, so a crowd of turrets made everything immune at once.
+  let turret = false;
+  let forges = 0;
+  for (const sp of out) {
+    if (sp.role === "honey") {
+      if (turret) sp.role = "";
+      turret = true;
+    } else if (sp.role === "forge") {
+      // armoured Forge Bots are a few tough targets, not the whole wave
+      forges += 1;
+      if (forges > 3) sp.role = "";
+    }
   }
   return { spawns: out, bonus: false, banner: "" };
 }
@@ -330,9 +388,17 @@ export function poopShape(chapter: number, level: number, roll: number) {
   return main;
 }
 
+/**
+ * One volley for a gun family at a rank. Every rank raises damage on a single
+ * target in the same steps for all three families (about 8, 12, 16, 20, 25 and
+ * 30 a second); the families differ in what else they do:
+ * PULSE adds angled side shots that sweep a wide area, NEUTRON's slow balls
+ * splash 40% onto neighbours, LANCE's narrow beams pierce through a column.
+ */
 export function volley(family: GunFamily, rank: number, focus: boolean): { shots: Shot[]; cd: number } {
-  const r = Math.max(1, Math.min(6, rank));
-  const tight = focus ? 0.34 : 1;
+  const r = Math.max(1, Math.min(6, Math.round(rank)));
+  const i = r - 1;
+  const tight = focus ? 0.4 : 1;
   const shots: Shot[] = [];
   const add = (s: Partial<Shot> & { ox: number; vx: number; vy: number }) => {
     shots.push({
@@ -349,52 +415,45 @@ export function volley(family: GunFamily, rank: number, focus: boolean): { shots
     });
   };
   if (family === "neutron") {
-    const balls = r >= 6 ? 4 : r >= 4 ? 3 : r >= 2 ? 2 : 1;
-    const splash = r >= 6 ? 40 : r >= 4 ? 34 : 28;
-    for (let i = 0; i < balls; i++) {
-      const ox = (i - (balls - 1) / 2) * 14;
-      add({ ox, vx: ox * 0.6, vy: -430, r: 5.2, dmg: 1.15, style: 2, splash, life: 1.8 });
+    const balls = [1, 1, 2, 2, 3, 3][i];
+    const dmg = [1.6, 2.4, 1.6, 2, 1.65, 2][i];
+    const splash = [26, 28, 30, 32, 36, 40][i];
+    for (let b = 0; b < balls; b++) {
+      const ox = (b - (balls - 1) / 2) * 9;
+      add({ ox, vx: ox * 0.8, vy: -620, r: 5.2, dmg, style: 2, splash, life: 1.4 });
     }
-    if (r === 3) add({ ox: 0, vx: 0, vy: -780, r: 2, dmg: 0.7, style: 0 });
-    return { shots, cd: 0.15 };
+    return { shots, cd: 0.2 };
   }
   if (family === "lance") {
-    const pierce = r >= 6 ? 6 : r >= 3 ? 5 : 3;
-    const beams = r >= 6 ? 3 : r >= 4 ? 2 : 1;
-    for (let i = 0; i < beams; i++) {
-      const ox = (i - (beams - 1) / 2) * 8;
-      add({ ox, vx: 0, vy: -1100, r: 3.1, dmg: 1.05, style: 3, pierce, life: 0.85 });
+    const beams = [1, 1, 2, 2, 2, 3][i];
+    const dmg = [1, 1.5, 1, 1.25, 1.55, 1.25][i];
+    const pierce = [2, 2, 3, 3, 4, 5][i];
+    for (let b = 0; b < beams; b++) {
+      const ox = (b - (beams - 1) / 2) * 7;
+      add({ ox, vx: 0, vy: -1100, r: 3.1, dmg, style: 3, pierce, life: 0.85 });
     }
-    if (r === 2 || r === 3) {
-      const s = (r === 3 ? 36 : 16) * tight;
-      add({ ox: -14, vx: -s, vy: -760, r: 1.7, dmg: 0.45, style: 3, pierce: 1 });
-      add({ ox: 14, vx: s, vy: -760, r: 1.7, dmg: 0.45, style: 3, pierce: 1 });
-    }
-    return { shots, cd: 0.105 };
+    return { shots, cd: 0.125 };
   }
   if (r === 1) add({ ox: 0, vx: 0, vy: -780, dmg: 1, style: 0 });
-  else if (r === 2) {
-    add({ ox: -10, vx: 0, vy: -760, style: 0 });
-    add({ ox: 10, vx: 0, vy: -760, style: 0 });
-  } else if (r === 3) {
-    const s = 40 * tight;
-    add({ ox: 0, vx: 0, vy: -800, style: 0 });
-    add({ ox: -12, vx: -s, vy: -740, style: 0 });
-    add({ ox: 12, vx: s, vy: -740, style: 0 });
-  } else {
-    const n = r >= 6 ? 7 : 5;
-    const spread = (r >= 6 ? 0.5 : 0.42) * tight;
-    for (let i = 0; i < n; i++) {
-      const a = (i - (n - 1) / 2) * (spread / ((n - 1) / 2));
-      const sp = 690;
-      add({ ox: Math.sin(a) * 6, vx: Math.sin(a) * sp, vy: -Math.cos(a) * sp, dmg: 0.72, style: 1, r: 2 });
+  else {
+    const core = [0, 0.75, 1, 1.25, 1.55, 1.85][i];
+    add({ ox: -7, vx: 0, vy: -780, dmg: core, style: 0 });
+    add({ ox: 7, vx: 0, vy: -780, dmg: core, style: 0 });
+    const side = [0, 0, 0.5, 0.5, 0.55, 0.6][i];
+    const angles = r >= 5 ? [0.15, 0.32] : r >= 3 ? [0.17] : [];
+    for (const a0 of angles) {
+      const a = a0 * tight;
+      for (const dir of [-1, 1]) {
+        add({ ox: dir * 12, vx: Math.sin(a) * 700 * dir, vy: -Math.cos(a) * 700, dmg: side, style: 1, r: 2 });
+      }
     }
   }
-  return { shots, cd: r >= 4 ? 0.12 : 0.125 };
+  return { shots, cd: 0.125 };
 }
 
+/** Orbiting pods: one from rank 4, two at rank 6 (matches what is drawn). */
 export function podCount(rank: number) {
-  return rank >= 5 ? 2 : rank >= 4 ? 1 : 0;
+  return rank >= 6 ? 2 : rank >= 4 ? 1 : 0;
 }
 
 export const FAMILIES: GunFamily[] = ["pulse", "neutron", "lance"];
