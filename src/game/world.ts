@@ -5,6 +5,7 @@ import {
   bulletScale,
   buySkin,
   buyUpgrade,
+  buyGun,
   chapterOf,
   equipSkin,
   isBossLevel,
@@ -14,20 +15,49 @@ import {
   gunName,
   salvageMul,
   writeFile,
+  grantStars,
+  starTotal,
   type Campaign,
   type RunSnap,
   type SkinId,
   type UpgradeId,
 } from "./meta";
+import {
+  BOMB_LINES,
+  BOSS_LINES,
+  CREDITS,
+  DEATH,
+  FAMILIES,
+  LAST_WORDS,
+  arcadeStage,
+  bossScript,
+  clearCash,
+  daySeed,
+  enemyBody,
+  extraLifeAt,
+  fastKillLimit,
+  fireBudget,
+  mayShoot,
+  phaseIndex,
+  planHazards,
+  planLevel,
+  podCount,
+  poopShape,
+  screenCap,
+  starsOf,
+  volley,
+  type GunFamily,
+  type VHazard,
+} from "./v3";
 
 export let WORLD_W = 1280;
 export let WORLD_H = 720;
 export let VIEW = 1;
 
 export type Kind = "dart" | "wedge" | "cruiser" | "drone" | "boss";
-export type PickupKind = "W" | "S" | "B" | "M" | "$";
-export type Mode = "menu" | "shop" | "options" | "standby" | "play" | "pause" | "over" | "clear" | "victory" | "bridge";
-export type Motion = "rank" | "sine" | "swoop" | "pincer" | "hold" | "boss" | "spiral" | "zigzag";
+export type PickupKind = "W" | "S" | "B" | "M" | "$" | "N" | "D";
+export type Mode = "menu" | "shop" | "options" | "standby" | "play" | "pause" | "over" | "clear" | "victory" | "bridge" | "levels" | "guide" | "ranks" | "arcadeover";
+export type Motion = "rank" | "sine" | "swoop" | "pincer" | "hold" | "boss" | "spiral" | "zigzag" | "conga" | "rain" | "dive";
 export type Cue = "kill" | "big" | "hit" | "graze" | "pickup" | "hurt" | "shield" | "bomb" | "wave" | "boss" | "clean" | "drive" | "missile" | "plink";
 
 export type Bullet = {
@@ -47,6 +77,9 @@ export type Bullet = {
   style?: number;
   pierce?: number;
   splash?: number;
+  age?: number;
+  bounces?: number;
+  split?: boolean;
 };
 
 export type Enemy = {
@@ -71,9 +104,13 @@ export type Enemy = {
   oy: number;
   ch: number;
   look: number;
+  role: string;
+  warn: number;
+  plate: number;
+  hide: number;
 };
 
-export type Pickup = { kind: PickupKind; x: number; y: number; vx: number; vy: number; value: number; rest: number };
+export type Pickup = { kind: PickupKind; x: number; y: number; vx: number; vy: number; value: number; rest: number; hue?: number; age?: number };
 export type Particle = {
   x: number;
   y: number;
@@ -107,6 +144,10 @@ export type Player = {
   muzzle: number;
   missiles: number;
   missileCd: number;
+  family: GunFamily;
+  splat: number;
+  slow: number;
+  insured: boolean;
 };
 
 export type World = {
@@ -151,10 +192,32 @@ export type World = {
   clearing: boolean;
   lootT: number;
   bridgeT: number;
+  budget: number;
+  snacks: number;
+  bombsUsed: number;
+  born: number;
+  slain: number;
+  freeze: number;
+  clock: number;
+  hazards: VHazard[];
+  arcade: boolean;
+  arcadeStage: number;
+  purse: number;
+  replay: boolean;
+  lifePaid: number;
+  seed: number;
+  dev: boolean;
+  god: boolean;
+  duck: boolean;
+  deathLine: string;
+  bombArmor: number;
   lockShake: boolean;
   returnMode: Mode;
   stars: { x: number; y: number; z: number; s: number }[];
   rng: () => number;
+  pinned: number | null;
+  starShow: string;
+  daily: boolean;
 };
 
 export type InputState = {
@@ -185,6 +248,7 @@ type Spawn = {
   vx?: number;
   spin?: number;
   oy?: number;
+  role?: string;
 };
 
 const BEST_KEY = "wingbreaker.best.v1";
@@ -336,10 +400,32 @@ export function createWorld(best = 0): World {
     clearing: false,
     lootT: 0,
     bridgeT: 0,
+    budget: 0,
+    snacks: file.campaign.snacks || 0,
+    bombsUsed: 0,
+    born: 0,
+    slain: 0,
+    freeze: 0,
+    clock: 0,
+    hazards: [],
+    arcade: false,
+    arcadeStage: 0,
+    purse: 0,
+    replay: false,
+    lifePaid: 0,
+    seed: 1,
+    dev: false,
+    god: false,
+    duck: false,
+    deathLine: DEATH[0],
+    bombArmor: 0,
     lockShake: reduceMotion,
     returnMode: "menu",
     stars,
     rng,
+    pinned: null,
+    starShow: "",
+    daily: false,
   };
 }
 
@@ -360,6 +446,10 @@ function freshPlayer(): Player {
     muzzle: 0,
     missiles: 0,
     missileCd: 0,
+    family: "pulse",
+    splat: 0,
+    slow: 0,
+    insured: false,
   };
 }
 
@@ -379,12 +469,22 @@ function liveSnap(w: World): RunSnap {
     feed: p.feed,
     coop: w.coop,
     missiles: Math.max(p.missiles, w.wing?.missiles ?? 0),
+    family: p.family,
+    snacks: Math.floor(w.snacks),
   };
 }
 
 export function persist(w: World, run: RunSnap | null) {
   w.meta.best = Math.max(w.meta.best, w.best);
+  if (w.pinned != null) w.meta.level = w.pinned;
   w.meta.level = clamp(w.meta.level, 1, LEVELS);
+  w.meta.snacks = Math.floor(w.snacks);
+  grantStars(w.meta);
+  if (w.pinned != null) {
+    writeFile(w.meta, w.snap);
+    saveBest(w.meta.best);
+    return;
+  }
   w.snap = run;
   writeFile(w.meta, run);
   saveBest(w.meta.best);
@@ -476,6 +576,22 @@ export function setAutoNext(w: World, on: boolean) {
   persist(w, w.snap);
 }
 
+export function setMusic(w: World, value: number) {
+  w.meta.music = Math.max(0, Math.min(100, Math.round(value)));
+  persist(w, w.snap);
+}
+
+export function setSfx(w: World, value: number) {
+  w.meta.sfx = Math.max(0, Math.min(100, Math.round(value)));
+  persist(w, w.snap);
+}
+
+export function purchaseGun(w: World, family: GunFamily) {
+  const result = buyGun(w.meta, family);
+  if (result === "ok") persist(w, w.snap);
+  return result;
+}
+
 export function ensureAutoFire(w: World, coarse: boolean) {
   if (typeof w.meta.autoFire === "boolean") return;
   w.meta.autoFire = coarse;
@@ -507,6 +623,15 @@ function resetField(w: World) {
   w.banner = "";
   w.bannerT = 0;
   w.perfect = true;
+  w.budget = 0;
+  w.bombsUsed = 0;
+  w.born = 0;
+  w.slain = 0;
+  w.freeze = 0;
+  w.clock = 0;
+  w.hazards = [];
+  w.duck = false;
+  w.bombArmor = 0;
 }
 
 function parkPlayer(w: World, snap: RunSnap | null) {
@@ -514,13 +639,17 @@ function parkPlayer(w: World, snap: RunSnap | null) {
   const p = w.player;
   p.x = WORLD_W / 2;
   p.y = Math.max(laneTop(), WORLD_H - 110);
-  p.lives = snap?.lives ?? kit.lives;
-  p.weapon = snap?.weapon ?? kit.weapon;
-  p.bombs = snap?.bombs ?? kit.bombs;
-  p.shield = snap?.shield ?? false;
+  p.lives = w.arcade ? (snap?.lives ?? 3) : (snap?.lives ?? kit.lives);
+  p.weapon = w.arcade ? (snap?.weapon ?? 1) : (snap?.weapon ?? kit.weapon);
+  p.bombs = w.arcade ? (snap?.bombs ?? 2) : (snap?.bombs ?? kit.bombs);
+  p.shield = w.arcade ? false : (snap?.shield ?? false);
   p.feed = snap?.feed ?? 0;
-  p.missiles = Math.max(kit.missiles, snap?.missiles ?? 0);
+  p.missiles = w.arcade ? 0 : Math.max(kit.missiles, snap?.missiles ?? 0);
   p.missileCd = 0.4;
+  p.family = w.arcade ? "pulse" : (snap?.family ?? kit.family);
+  p.splat = 0;
+  p.slow = 0;
+  p.insured = !w.arcade && w.meta.upgrades.insurance > 0;
   p.inv = 1.35;
   p.alive = true;
   p.fireCd = 0.2;
@@ -537,6 +666,7 @@ function parkPlayer(w: World, snap: RunSnap | null) {
     wing.fireCd = 0.2;
     wing.missiles = p.missiles;
     wing.missileCd = 0.55;
+    wing.family = p.family;
     wing.alive = true;
     p.x = WORLD_W * 0.38;
     wing.x = WORLD_W * 0.62;
@@ -558,7 +688,8 @@ export function startSortie(w: World, snap?: RunSnap | null) {
   w.record = false;
   parkPlayer(w, use);
   w.mode = "play";
-  w.rng = mulberry32((Math.random() * 1e9) | 0);
+  w.rng = mulberry32(w.seed || ((Math.random() * 1e9) | 0));
+  if (!w.seed) w.seed = (Math.random() * 1e9) | 0;
   launchLevel(w);
   persist(w, liveSnap(w));
 }
@@ -577,6 +708,9 @@ export function startCoop(w: World) {
 
 export function chooseCrew(w: World, crew: "solo" | "coop") {
   w.meta.crew = crew;
+  w.pinned = null;
+  w.arcade = false;
+  w.daily = false;
   persist(w, w.snap);
   if (crew === "coop") startCoop(w);
   else startSolo(w);
@@ -589,8 +723,77 @@ export function resumeSaved(w: World) {
 }
 
 export function retryLevel(w: World) {
+  if (w.arcade) {
+    startArcade(w, w.daily);
+    return;
+  }
+  if (w.pinned != null) {
+    const frontier = w.pinned;
+    const n = w.level;
+    const kit = loadoutOf(w.meta);
+    startSortie(w, {
+      level: n,
+      lives: kit.lives,
+      weapon: kit.weapon,
+      bombs: kit.bombs,
+      shield: false,
+      score: 0,
+      feed: 0,
+      coop: w.coop,
+      missiles: kit.missiles,
+      family: kit.family,
+      snacks: Math.floor(w.snacks),
+    });
+    w.pinned = frontier;
+    w.meta.level = frontier;
+    persist(w, w.snap);
+    return;
+  }
   w.meta.level = clamp(w.level || w.meta.level, 1, LEVELS);
   startSortie(w, null);
+}
+
+export function practiceLevel(w: World, n: number) {
+  const frontier = w.meta.level;
+  if (n > frontier || n < 1) return;
+  if (n < frontier && (w.meta.stars[n] ?? 0) <= 0) return;
+  w.arcade = false;
+  w.daily = false;
+  w.pinned = n < frontier ? frontier : null;
+  const kit = loadoutOf(w.meta);
+  startSortie(w, {
+    level: n,
+    lives: kit.lives,
+    weapon: kit.weapon,
+    bombs: kit.bombs,
+    shield: false,
+    score: 0,
+    feed: 0,
+    coop: w.meta.crew === "coop",
+    missiles: kit.missiles,
+    family: kit.family,
+    snacks: Math.floor(w.snacks),
+  });
+  if (w.pinned != null) {
+    w.meta.level = w.pinned;
+    persist(w, w.snap);
+  }
+}
+
+export function leaveRun(w: World) {
+  w.arcade = false;
+  w.daily = false;
+  w.pinned = null;
+  w.mode = "menu";
+  persist(w, w.snap);
+}
+
+export function stampRank(w: World, name: string) {
+  const clean = name.toUpperCase().replace(/[^A-Z]/g, "").slice(0, 3).padEnd(3, "A");
+  const row = [...w.meta.ranks].reverse().find((r) => r.name === "YOU" && r.score === w.score);
+  if (row) row.name = clean;
+  else w.meta.ranks = [{ name: clean, score: w.score, stage: w.arcadeStage, date: daySeed().key, skin: w.meta.skin }, ...w.meta.ranks].slice(0, 10);
+  persist(w, w.snap);
 }
 
 export function startOrResume(w: World) {
@@ -599,6 +802,24 @@ export function startOrResume(w: World) {
 }
 
 export function nextLevel(w: World) {
+  if (w.arcade) {
+    w.arcadeStage = Math.min(30, w.arcadeStage + 1);
+    const spec = arcadeStage(w.arcadeStage);
+    startSortie(w, {
+      level: spec.level,
+      lives: Math.max(1, w.player.lives),
+      weapon: w.player.weapon,
+      bombs: w.player.bombs,
+      shield: w.player.shield,
+      score: w.score,
+      feed: w.player.feed,
+      coop: false,
+      missiles: w.player.missiles,
+      family: w.player.family,
+      snacks: w.snacks,
+    });
+    return;
+  }
   if (w.level >= LEVELS) {
     w.mode = "victory";
     return;
@@ -614,24 +835,51 @@ export function nextLevel(w: World) {
     feed: w.player.feed,
     coop: w.coop,
     missiles: Math.max(w.player.missiles, w.wing?.missiles ?? 0, kit.missiles),
+    family: w.player.family,
+    snacks: Math.floor(w.snacks),
   });
 }
 
 function launchLevel(w: World) {
   const n = w.level;
   const ch = chapterOf(n);
+  w.clock = 0;
+  w.bombsUsed = 0;
+  w.born = 0;
+  w.slain = 0;
+  w.replay = !w.arcade && (w.meta.stars[n] ?? 0) > 0;
+  const planned = planLevel(n, WORLD_W, WORLD_H, (w.seed || n * 997) + n * 13);
+  w.hazards = planHazards(n, WORLD_W, WORLD_H);
   if (isBossLevel(n)) {
-    w.banner = ch.boss.toUpperCase();
-    w.bannerT = 1.8;
+    const line = BOSS_LINES[Math.min(9, Math.floor((n - 1) / 10))];
+    w.banner = line ? line[0] : ch.boss.toUpperCase();
+    w.bannerT = 2;
     w.bossUp = true;
     w.cues.push("boss");
     spawnEnemy(w, "boss", WORLD_W / 2, "boss", undefined, -48);
+    const boss = w.enemies[w.enemies.length - 1];
+    if (boss && w.arcade) {
+      const spec = arcadeStage(w.arcadeStage);
+      if (spec.boss) {
+        boss.hp = Math.round(boss.hp * spec.hpMul);
+        boss.max = boss.hp;
+      }
+    }
     return;
   }
-  w.banner = `${ch.name.toUpperCase()}  ${String(n).padStart(2, "0")}`;
-  w.bannerT = 1.25;
+  w.banner = planned.banner || `${ch.name.toUpperCase()}  ${String(n).padStart(2, "0")}`;
+  w.bannerT = planned.bonus ? 2.2 : 1.25;
   w.cues.push("wave");
-  const list = layout(n);
+  const list = planned.spawns.map((s) => ({
+    at: s.at,
+    kind: s.kind,
+    x: s.x,
+    motion: s.motion as Motion,
+    role: s.role,
+    oy: s.oy,
+    vx: s.vx,
+    spin: s.spin,
+  }));
   grant(list, n);
   w.spawns = list;
 }
@@ -833,36 +1081,20 @@ function pocket(out: Spawn[], at: number, oy: number, motion: Motion, kinds: Kin
   });
 }
 
-function spawnEnemy(w: World, kind: Kind, x: number, motion: Motion, drop?: PickupKind, y = -28, vx = 0, spin?: number, oy?: number, value = 0) {
+function spawnEnemy(w: World, kind: Kind, x: number, motion: Motion, drop?: PickupKind, y = -28, vx = 0, spin?: number, oy?: number, value = 0, role = "") {
   const level = Math.max(1, w.level);
   const ch = Math.min(9, Math.floor((level - 1) / 10));
-  let hp = 1;
-  let r = 12;
-  let score = 80 + level;
-  let vy = 72;
-  if (kind === "drone") {
-    hp = Math.min(5, 2 + Math.floor((level - 1) / 20));
-    r = 13;
-    score = 140 + level * 2;
-    vy = 78;
-  } else if (kind === "wedge") {
-    hp = Math.min(9, 3 + Math.floor((level - 1) / 11));
-    r = 14;
-    score = 160 + level * 2;
-    vy = 64;
-  } else if (kind === "cruiser") {
-    hp = Math.min(18, 5 + Math.floor((level - 1) / 7) + Math.floor(ch / 3));
-    r = 18;
-    score = 320 + level * 3;
-    vy = 42;
-  } else if (kind === "boss") {
-    hp = bossHp(level);
-    r = 32;
-    score = 4000 + level * 40;
-    vy = 46;
+  const body = enemyBody(kind, level);
+  let hp = body.hp;
+  let r = body.r;
+  if (role === "wall") hp *= 3;
+  if (role === "chip" || role === "rain" || role === "spore") hp = 1;
+  if (role === "forge") {
+    /* plate is the armor */
   }
-  const fire =
-    motion === "swoop" ? 0.35 : kind === "boss" ? 1.35 : kind === "dart" ? 1.15 + w.rng() * 0.4 : 0.75 + w.rng() * 0.35;
+  const score = body.score;
+  const vy = role === "rain" ? 180 : motion === "conga" ? 120 : body.vy;
+  const fire = motion === "boss" ? 1.1 : 0;
   w.enemies.push({
     kind,
     x,
@@ -884,15 +1116,21 @@ function spawnEnemy(w: World, kind: Kind, x: number, motion: Motion, drop?: Pick
     mark: 0,
     oy: oy ?? (kind === "boss" ? Math.min(WORLD_H * 0.18, 132) : kind === "cruiser" ? WORLD_H * 0.16 : WORLD_H * 0.22),
     ch,
-    look:
-      kind === "boss"
-        ? ch
-        : (ch * 5 + level + Math.round((spin ?? 0) * 3) + (kind === "cruiser" ? 3 : kind === "drone" ? 1 : 0)) % 36,
+    look: kind === "boss" ? ch : (w.born * 5 + ch * 3 + (kind === "cruiser" ? 3 : kind === "drone" ? 1 : 0)) % FAUNA.length,
+    role,
+    warn: 0,
+    plate: role === "forge" ? 12 : 0,
+    hide: role === "hermit" ? 1.2 : 0,
   });
+  w.born += 1;
+  const id = role || kind;
+  if (!w.meta.seen.includes(id)) w.meta.seen.push(id);
 }
 
 function burst(w: World, x: number, y: number, color: string, n: number, speed: number, chunk = false) {
   const count = w.reduce ? Math.max(1, Math.ceil(n * 0.35)) : n;
+  const confetti = starTotal(w.meta) >= 100;
+  const party = ["#e07a3d", "#7eb6d6", "#f2d24a", "#f4f1ea", "#c44536"];
   for (let i = 0; i < count; i++) {
     if (w.parts.length > 220) w.parts.shift();
     const a = w.rng() * Math.PI * 2;
@@ -905,7 +1143,7 @@ function burst(w: World, x: number, y: number, color: string, n: number, speed: 
       vy: Math.sin(a) * s,
       life: (chunk ? 0.35 : 0.18) + w.rng() * 0.28,
       max: 0.55,
-      color,
+      color: confetti ? party[i % party.length] : color,
       rot: w.rng() * 6,
       vr: (w.rng() - 0.5) * (chunk ? 10 : 4),
       w: size,
@@ -952,6 +1190,14 @@ function addScore(w: World, base: number, x: number, y: number, show: boolean) {
   const mult = multiplierOf(w);
   const gained = Math.round(base * mult);
   w.score += gained;
+  if (w.arcade && w.player.lives < 6) {
+    const extra = extraLifeAt(w.score, w.lifePaid);
+    if (extra.grant > 0) {
+      w.player.lives = Math.min(6, w.player.lives + extra.grant);
+      w.lifePaid = extra.paid;
+      float(w, w.player.x, w.player.y - 36, "1UP", true);
+    }
+  }
   const prev = w.chain;
   w.chain = Math.min(40, w.chain + 1);
   w.chainT = 1.75;
@@ -962,8 +1208,9 @@ function addScore(w: World, base: number, x: number, y: number, show: boolean) {
 }
 
 function bank(w: World, amount: number, x: number, y: number, show: boolean) {
-  const n = Math.max(1, Math.round(amount * salvageMul(w.meta.upgrades.salvage)));
-  w.meta.dollars += n;
+  const n = Math.max(1, Math.round(amount * (w.arcade ? 0.5 : salvageMul(w.meta.upgrades.salvage))));
+  if (w.arcade) w.purse += n;
+  else w.meta.dollars += n;
   if (show) {
     float(w, x, y - 18, `+$${n}`, true);
     w.cues.push("pickup");
@@ -988,13 +1235,35 @@ function killEnemy(w: World, e: Enemy) {
   else if (e.kind === "drone") w.hitstop = 0.026;
   w.cues.push(big ? "big" : "kill");
   addScore(w, e.score, e.x, e.y, big);
-  if (e.kind === "cruiser") float(w, e.x, e.y - 22, FAUNA[e.look % FAUNA.length].toUpperCase(), true);
+  if (e.kind === "cruiser") {
+    float(w, e.x, e.y - 22, FAUNA[e.look % FAUNA.length].toUpperCase(), true);
+    if (w.rng() < 0.25) float(w, e.x, e.y - 40, LAST_WORDS[Math.floor(w.rng() * LAST_WORDS.length)] ?? "WORTH IT");
+  }
   if (e.kind === "boss") {
+    if (e.ch === 9) {
+      w.banner = "IT WAS A TOILET THE WHOLE TIME.";
+      w.bannerT = 2.4;
+      if (!w.meta.owned.includes("throne")) w.meta.owned.push("throne");
+    }
     bossLoot(w, e);
+    w.slain += 1;
     return;
   }
-  const purse = e.kind === "cruiser" ? 18 : e.kind === "wedge" ? 12 : e.kind === "drone" ? 10 : 7;
-  bank(w, purse + Math.floor(w.level / 5), e.x, e.y, e.kind === "cruiser");
+  const body = enemyBody(e.kind, w.level);
+  bank(w, e.role === "bonus" ? 2 : body.cash, e.x, e.y, e.kind === "cruiser");
+  w.slain += 1;
+  const snacks = e.kind === "cruiser" ? 5 : w.rng() < 0.35 ? 1 : 0;
+  for (let i = 0; i < snacks; i++) dropPickup(w, "N", e.x + (i - 1) * 6, e.y, 1);
+  if (!w.duck && w.rng() < 0.03) {
+    w.duck = true;
+    dropPickup(w, "D", e.x, e.y, 0);
+  }
+  if (e.role === "gnat" || e.role === "mother") {
+    const bits = e.role === "mother" ? 4 : 3;
+    for (let i = 0; i < bits; i++) {
+      spawnEnemy(w, "dart", e.x, "rain", undefined, e.y, (i - 1) * 40, i, e.y, 0, e.role === "mother" ? "spore" : "chip");
+    }
+  }
   if (e.drop) {
     dropPickup(w, e.drop, e.x, e.y, e.dropValue);
   } else {
@@ -1038,27 +1307,31 @@ function bossLoot(w: World, e: Enemy) {
 function takePickup(w: World, kind: PickupKind, value: number, who: Player = w.player) {
   const p = who;
   if (kind === "W") {
-    if (p.weapon < 6) {
+    const family = FAMILIES[(value || 0) % 3] ?? "pulse";
+    if (family !== p.family) {
+      p.family = family;
+      w.cues.push("pickup");
+      float(w, p.x, p.y - 28, gunName(p.weapon, p.family), true);
+    } else if (p.weapon < 6) {
       p.weapon += 1;
       w.cues.push("pickup");
-      float(w, p.x, p.y - 28, gunName(p.weapon), true);
-      cheer(w, p.x, p.y, "#e07a3d");
+      float(w, p.x, p.y - 28, gunName(p.weapon, p.family), true);
     } else {
       p.feed = 6.5;
       w.cues.push("drive");
       float(w, p.x, p.y - 28, "AFTERBURNER", true);
-      cheer(w, p.x, p.y, "#e07a3d");
     }
+    cheer(w, p.x, p.y, family === "neutron" ? "#9ed24a" : family === "lance" ? "#e07a3d" : "#7eb6d6");
   } else if (kind === "S") {
     p.shield = true;
     w.cues.push("pickup");
-    float(w, p.x, p.y - 28, "SHIELD");
+    float(w, p.x, p.y - 28, "TP SHIELD");
     cheer(w, p.x, p.y, "#7eb6d6");
   } else if (kind === "B") {
     w.player.bombs = Math.min(5, w.player.bombs + 1);
     if (w.wing) w.wing.bombs = w.player.bombs;
     w.cues.push("pickup");
-    float(w, p.x, p.y - 28, "BOMB", true);
+    float(w, p.x, p.y - 28, "AIR FRESHENER", true);
     cheer(w, p.x, p.y, "#e07a3d");
   } else if (kind === "$") {
     bank(w, value || 12, p.x, p.y, true);
@@ -1066,8 +1339,27 @@ function takePickup(w: World, kind: PickupKind, value: number, who: Player = w.p
   } else if (kind === "M") {
     p.missiles = Math.min(9, p.missiles + 3);
     w.cues.push("pickup");
-    float(w, p.x, p.y - 28, "MISSILES", true);
+    float(w, p.x, p.y - 28, "PLUNGERS ×3", true);
     cheer(w, p.x, p.y, "#e07a3d");
+  } else if (kind === "N") {
+    const mul = w.arcade ? 1 : w.meta.upgrades.pockets >= 2 ? 1.5 : w.meta.upgrades.pockets === 1 ? 1.25 : 1;
+    w.snacks += mul;
+    w.score += 1;
+    while (w.snacks >= 100) {
+      w.snacks -= 100;
+      if (w.player.bombs >= 5) {
+        w.score += 2000;
+        float(w, p.x, p.y - 28, "+2,000", true);
+      } else {
+        w.player.bombs += 1;
+        if (w.wing) w.wing.bombs = w.player.bombs;
+        float(w, p.x, p.y - 28, "SNACK ATTACK! +1 BOMB", true);
+      }
+    }
+  } else if (kind === "D") {
+    w.freeze = w.bossUp ? 1.5 : 3;
+    w.cues.push("pickup");
+    float(w, p.x, p.y - 28, "RUBBER DUCK – EVERYONE STOPS TO LOOK", true);
   } else {
     w.chain = Math.min(40, w.chain + 8);
     w.chainT = 2.1;
@@ -1109,6 +1401,15 @@ function stepPickups(w: World, dt: number) {
       } else next.push(pk);
       continue;
     }
+    if (pk.kind === "W") {
+      pk.age = (pk.age ?? 0) + dt;
+      if ((pk.age ?? 0) >= 2) {
+        pk.age = 0;
+        pk.hue = ((pk.hue ?? 0) + 1) % 3;
+        pk.value = pk.hue;
+      }
+    }
+    if (pk.kind === "N") pk.vy = Math.max(pk.vy, 130);
     if (dist < 170 + magnet * 55) {
       pk.vx += (dx / dist) * (80 + magnet * 80) * dt;
       pk.vy += (dy / dist) * (60 + magnet * 46) * dt;
@@ -1132,13 +1433,15 @@ function stepPickups(w: World, dt: number) {
 }
 
 function hurtPlayer(w: World, p: Player = w.player) {
+  if (w.god) return;
   if (!p.alive || p.inv > 0) return;
   if (p.shield) {
     p.shield = false;
     p.inv = 0.4;
-    burst(w, p.x, p.y, "#7eb6d6", 12, 150, false);
-    ring(w, p.x, p.y, "#7eb6d6", 0.28, 8, 1.5);
+    burst(w, p.x, p.y, "#f4f1ea", 12, 150, false);
+    ring(w, p.x, p.y, "#f4f1ea", 0.28, 8, 1.5);
     addTrauma(w, 0.28);
+    float(w, p.x, p.y - 30, "TP SAVED YOU");
     w.cues.push("shield");
     return;
   }
@@ -1146,10 +1449,17 @@ function hurtPlayer(w: World, p: Player = w.player) {
   p.inv = 1.85;
   w.chain = 0;
   w.perfect = false;
-  if (p.weapon > 1) {
+  if (w.rng() < 0.3) {
+    p.splat = 2;
+    float(w, p.x, p.y - 24, "SPLAT");
+  }
+  if (p.insured) {
+    p.insured = false;
+    float(w, p.x, p.y - 46, "INSURED");
+  } else if (p.weapon > 1) {
     p.weapon -= 1;
     p.feed = 0;
-    float(w, p.x, p.y - 46, gunName(p.weapon));
+    float(w, p.x, p.y - 46, gunName(p.weapon, p.family));
   }
   w.flash = 0.22;
   addTrauma(w, 0.66);
@@ -1159,88 +1469,82 @@ function hurtPlayer(w: World, p: Player = w.player) {
   if (w.player.lives <= 0) {
     w.player.alive = false;
     if (w.wing) w.wing.alive = false;
-    w.mode = "over";
-    w.clearing = false;
-    w.record = w.score > w.best;
-    if (w.record) w.best = w.score;
-    w.meta.best = Math.max(w.meta.best, w.best);
-    w.meta.level = clamp(w.level, 1, LEVELS);
-    persist(w, w.snap);
+    w.deathLine = DEATH[Math.floor(w.rng() * DEATH.length)] ?? DEATH[0];
+    if (w.arcade) {
+      const pay = Math.round(w.purse);
+      w.meta.dollars += pay;
+      w.clearCash = pay;
+      pushRank(w);
+      w.mode = "arcadeover";
+      const frontier = w.pinned;
+      w.pinned = null;
+      if (frontier != null) w.meta.level = frontier;
+      persist(w, w.snap);
+      w.pinned = frontier;
+    } else {
+      w.mode = "over";
+      w.clearing = false;
+      w.record = w.score > w.best;
+      if (w.record) w.best = w.score;
+      w.meta.best = Math.max(w.meta.best, w.best);
+      w.meta.level = clamp(w.level, 1, LEVELS);
+      persist(w, w.snap);
+    }
     w.cues.push("big");
   }
 }
 
 function firePlayer(w: World, p: Player, focus: boolean) {
   const feed = p.feed > 0;
-  const lvl = Math.max(1, Math.min(6, p.weapon));
-  const tight = focus ? 0.32 : 1;
-  const shots: {
-    ox: number;
-    oy?: number;
-    vx: number;
-    vy: number;
-    r?: number;
-    dmg?: number;
-    style?: number;
-    pierce?: number;
-    splash?: number;
-    life?: number;
-  }[] = [];
-  if (lvl === 1) {
-    shots.push({ ox: 0, vx: 0, vy: -780, style: 0, dmg: 1, r: 2.3 });
-  } else if (lvl === 2) {
-    const spread = 18 * tight;
-    shots.push({ ox: -10, vx: -spread, vy: -760, style: 0, dmg: 1, r: 2.2 });
-    shots.push({ ox: 10, vx: spread, vy: -760, style: 0, dmg: 1, r: 2.2 });
-  } else if (lvl === 3) {
-    const spread = 42 * tight;
-    shots.push({ ox: 0, vx: 0, vy: -800, style: 0, dmg: 1, r: 2.3 });
-    shots.push({ ox: -13, vx: -spread, vy: -740, style: 0, dmg: 1, r: 2.15 });
-    shots.push({ ox: 13, vx: spread, vy: -740, style: 0, dmg: 1, r: 2.15 });
-  } else if (lvl === 4) {
-    const angles = focus ? [-0.14, -0.07, 0, 0.07, 0.14] : [-0.46, -0.22, 0, 0.22, 0.46];
-    for (const a of angles) {
-      const sp = 690;
-      shots.push({ ox: Math.sin(a) * 6, vx: Math.sin(a) * sp, vy: -Math.cos(a) * sp, style: 1, dmg: 0.7, r: 2.05 });
-    }
-  } else if (lvl === 5) {
-    shots.push({ ox: -14, vx: -10, vy: -420, style: 2, dmg: 2.35, r: 5.5, splash: 28, life: 1.85 });
-    shots.push({ ox: 14, vx: 10, vy: -420, style: 2, dmg: 2.35, r: 5.5, splash: 28, life: 1.85 });
-    shots.push({ ox: 0, vx: 0, vy: -820, style: 0, dmg: 0.5, r: 1.7 });
-  } else {
-    shots.push({ ox: 0, vx: 0, vy: -1120, style: 3, dmg: 1.5, r: 3.3, pierce: 6, life: 0.9 });
-    const spread = 24 * tight;
-    shots.push({ ox: -15, vx: -spread, vy: -760, style: 0, dmg: 0.65, r: 1.9 });
-    shots.push({ ox: 15, vx: spread, vy: -760, style: 0, dmg: 0.65, r: 1.9 });
-  }
-  for (const pod of podOffsets(w.time, lvl)) {
-    shots.push({ ox: pod.x, oy: pod.y, vx: 0, vy: -640, style: 0, dmg: 0.42, r: 1.65 });
-  }
+  const family = p.family || "pulse";
+  const rank = Math.max(1, Math.min(6, p.weapon));
+  const pack = volley(family, rank, focus);
   const kick = feed ? 1.18 : 1;
-  for (const s of shots) {
-    if (w.bullets.length > 200) break;
+  for (const s of pack.shots) {
+    if (w.bullets.length > 260) break;
     w.bullets.push({
       x: p.x + s.ox,
       y: p.y - 18 + (s.oy ?? 0),
       vx: s.vx,
       vy: s.vy,
-      r: s.r ?? 2.2,
+      r: s.r,
       friendly: true,
-      dmg: (s.dmg ?? 1) * kick,
-      life: s.life ?? 1.35,
+      dmg: s.dmg * kick,
+      life: s.life,
       homing: false,
       grazed: false,
       hot: feed,
       tint: 0,
-      style: s.style ?? 0,
-      pierce: s.pierce ?? 0,
-      splash: s.splash ?? 0,
+      style: s.style,
+      pierce: s.pierce,
+      splash: s.splash,
+    });
+  }
+  const pods = podCount(rank);
+  for (let i = 0; i < pods; i++) {
+    const a = w.time * 2.5 + i * Math.PI;
+    if (w.bullets.length > 260) break;
+    w.bullets.push({
+      x: p.x + Math.cos(a) * 28,
+      y: p.y + Math.sin(a) * 11,
+      vx: 0,
+      vy: -640,
+      r: 1.6,
+      friendly: true,
+      dmg: 0.42 * kick,
+      life: 1.2,
+      homing: false,
+      grazed: false,
+      hot: feed,
+      tint: 0,
+      style: family === "neutron" ? 2 : family === "lance" ? 3 : 0,
+      pierce: family === "lance" ? 1 : 0,
+      splash: 0,
     });
   }
   p.muzzle = 0.05;
-  const trig = 1 - w.meta.upgrades.trigger * 0.1;
-  const bases = [0, 0.128, 0.122, 0.114, 0.126, 0.17, 0.09];
-  p.fireCd = Math.max(0.052, (bases[lvl] ?? 0.12) * trig * (feed ? 0.7 : 1));
+  const trig = 1 - (w.arcade ? 0 : w.meta.upgrades.trigger * 0.1);
+  p.fireCd = Math.max(0.05, pack.cd * trig * (feed ? 0.7 : 1));
 }
 
 function tryMissile(w: World, p: Player, fire: boolean, dt: number) {
@@ -1303,6 +1607,101 @@ function shotCap(level: number) {
   if (level < 55) return 11;
   if (level < 75) return 16;
   return 22;
+}
+
+function pushHostile(w: World, x: number, y: number, a: number, speed: number, r: number, shape: number) {
+  if (w.bullets.length > 300) return;
+  const who = nearestPilot(w, x, y);
+  if (Math.hypot(who.x - x, who.y - y) < 100) return;
+  w.bullets.push({
+    x, y,
+    vx: Math.cos(a) * speed,
+    vy: Math.sin(a) * speed,
+    r: Math.max(5, r * 0.72),
+    friendly: false,
+    dmg: 1,
+    life: 6,
+    homing: false,
+    grazed: false,
+    hot: false,
+    tint: 0,
+    shape,
+    age: 0,
+    bounces: 0,
+    split: false,
+  });
+}
+
+function releaseShot(w: World, e: Enemy) {
+  const who = nearestPilot(w, e.x, e.y);
+  const aim = Math.atan2(who.y - e.y, who.x - e.x);
+  const down = Math.PI / 2;
+  const budget = fireBudget(w.level);
+  const roll = w.rng();
+  const aimed = w.level >= 7 && (w.level < 21 ? roll < 0.3 : w.level < 61 ? roll < 0.5 : roll < 0.6);
+  const angle = aimed ? aim : down;
+  const shape = poopShape(e.ch, w.level, w.rng());
+  const seenName = ["swirl", "pellets", "swirl", "swirl", "swirl", "frozen", "pebble", "comet", "honeyblob", "slime", "ghostpoop", "chili", "zap", "unicorn", "gold", "diamond", "fart"][shape] ?? "swirl";
+  if (!w.meta.seen.includes(seenName)) w.meta.seen.push(seenName);
+  const n = w.level < 21 ? 1 : w.level < 61 ? 1 + (w.rng() < 0.45 ? 1 : 0) : 1 + Math.floor(w.rng() * 3);
+  if (shape === 1 && w.rng() < 0.35) {
+    for (const a of [-0.2, 0, 0.2]) pushHostile(w, e.x, e.y + 10, down + a, budget.speed * 1.3, 4, 1);
+    return;
+  }
+  for (let i = 0; i < n; i++) {
+    const spread = (i - (n - 1) / 2) * 0.16;
+    pushHostile(w, e.x, e.y + 10, angle + spread, budget.speed, 6, shape);
+  }
+  if (!w.meta.seen.includes("swirl")) w.meta.seen.push("swirl");
+}
+
+function budgetShots(w: World, dt: number) {
+  const rules = fireBudget(w.level);
+  w.budget += rules.rate * dt;
+  if (w.budget < 1 || hostileCount(w) >= rules.cap) return;
+  const crew = living(w);
+  if (!crew.length) return;
+  const who = crew[0];
+  const pool = w.enemies.filter((e, i) => {
+    if (e.hp <= 0 || e.kind === "boss" || e.warn > 0 || e.fire > 0) return false;
+    if (e.hide > 0.2 && e.role === "hermit") return false;
+    if (e.role === "ghost" && Math.sin(e.t * 2.4) < 0) return false;
+    if (!mayShoot(e.kind, e.role, w.level, i)) return false;
+    return e.y > 20 && e.y < who.y - 140;
+  });
+  if (!pool.length) return;
+  const e = pool[Math.floor(w.rng() * pool.length)];
+  e.warn = w.level <= 20 || w.rng() < 0.55 ? 0.25 : 0.02;
+  e.fire = rules.cdMin + w.rng() * Math.max(0.05, rules.cdMax - rules.cdMin);
+  w.budget -= 1;
+}
+
+function runBoss(w: World, e: Enemy) {
+  const who = nearestPilot(w, e.x, e.y);
+  const aim = Math.atan2(who.y - e.y, who.x - e.x);
+  const cmds = bossScript(e.ch, e.mark, e.t, aim, WORLD_W);
+  const special = Math.floor(e.t) % 5 === 0;
+  for (const cmd of cmds) {
+    if (cmd.op === "shot") pushHostile(w, e.x, e.y + 16, cmd.a, cmd.speed, cmd.r, cmd.shape);
+    else if (cmd.op === "summon" && special && w.enemies.length < 28) spawnEnemy(w, cmd.kind, cmd.x, "sine", undefined, e.y + 20, 0, undefined, e.y + 30, 0, cmd.role);
+    else if (cmd.op === "banner" && special) {
+      w.banner = cmd.text;
+      w.bannerT = 0.8;
+    } else if (cmd.op === "clear") cashBullets(w);
+    else if (cmd.op === "dive" && special) {
+      e.vy = 280;
+      e.y += 40;
+    }
+  }
+}
+
+function cashBullets(w: World) {
+  for (const b of w.bullets) {
+    if (b.friendly || b.life <= 0) continue;
+    b.life = 0;
+    w.score += 5;
+    if (w.rng() < 0.1) dropPickup(w, "$", b.x, b.y, 1);
+  }
 }
 
 function enemyShoot(w: World, e: Enemy): number {
@@ -1467,16 +1866,27 @@ function detonate(w: World, who?: Player) {
   if (!owner || !owner.alive || w.player.bombs <= 0 || w.mode !== "play") return;
   w.player.bombs -= 1;
   if (w.wing) w.wing.bombs = w.player.bombs;
+  w.bombsUsed += 1;
   w.flash = 0.32;
   w.hitstop = 0.05;
   addTrauma(w, 0.85);
-  w.bullets = w.bullets.filter((b) => b.friendly);
+  owner.inv = Math.max(owner.inv, 1);
+  cashBullets(w);
   for (const e of w.enemies) {
-    e.hp -= e.kind === "boss" ? e.max * 0.18 : e.hp;
+    if (e.kind === "boss") {
+      if (w.bombArmor > 0) {
+        float(w, e.x, e.y - 20, "NICE TRY");
+      } else {
+        e.hp -= e.max * 0.06;
+        w.bombArmor = 1.5;
+      }
+    } else e.hp = 0;
     e.flash = 0.1;
   }
+  const line = BOMB_LINES[Math.floor(w.rng() * BOMB_LINES.length)] ?? "FRESH!";
+  w.banner = line;
+  w.bannerT = 0.8;
   ring(w, owner.x, owner.y, "#e7eaee", 0.48, 12, 2);
-  ring(w, owner.x, WORLD_H * 0.35, "#e07a3d", 0.4, 8, 1.5);
   burst(w, owner.x, owner.y, "#e7eaee", 26, 280, false);
   w.cues.push("bomb");
   reap(w);
@@ -1502,6 +1912,15 @@ function present(w: World, dt: number, timers: boolean) {
       w.wing.muzzle = Math.max(0, w.wing.muzzle - dt);
     }
     w.grazeCd = Math.max(0, w.grazeCd - dt);
+    w.freeze = Math.max(0, w.freeze - dt);
+    w.bombArmor = Math.max(0, w.bombArmor - dt);
+    w.clock += dt;
+    w.player.splat = Math.max(0, w.player.splat - dt);
+    w.player.slow = Math.max(0, w.player.slow - dt);
+    if (w.wing) {
+      w.wing.splat = Math.max(0, w.wing.splat - dt);
+      w.wing.slow = Math.max(0, w.wing.slow - dt);
+    }
   }
   if (w.mode === "pause") return;
   for (const p of w.parts) {
@@ -1534,22 +1953,14 @@ function moveEnemy(w: World, e: Enemy, dt: number) {
     if (e.y > nest) e.y = nest + Math.sin(e.t * 1.4) * 4;
     e.x = clamp(WORLD_W / 2 + Math.sin(e.t * 0.55) * Math.min(120, WORLD_W * 0.12), edgeOf("boss"), WORLD_W - edgeOf("boss"));
     const ratio = e.hp / e.max;
-    if (e.mark < 1 && ratio < 0.66) {
-      e.mark = 1;
-      e.fire = 0.9;
-      w.banner = "CRACK";
-      w.bannerT = 0.75;
-      spawnEnemy(w, ch >= 6 ? "drone" : "wedge", e.x - 40, "sine", undefined, e.y + 24, 0, undefined, e.y + 36);
-      spawnEnemy(w, ch >= 6 ? "drone" : "wedge", e.x + 40, "sine", undefined, e.y + 24, 0, undefined, e.y + 36);
-      if (ch >= 4) spawnEnemy(w, "dart", e.x, "swoop", undefined, e.y + 18, 0, 1, WORLD_H * 0.3);
-    } else if (e.mark < 2 && ratio < 0.33) {
-      e.mark = 2;
-      e.fire = 0.7;
-      w.banner = "CORE";
-      w.bannerT = 0.75;
-      spawnEnemy(w, "dart", e.x - 50, "swoop", undefined, e.y + 10, -90, undefined, WORLD_H * 0.28);
-      spawnEnemy(w, "dart", e.x + 50, "swoop", undefined, e.y + 10, 90, undefined, WORLD_H * 0.28);
-      if (ch >= 7) spawnEnemy(w, "wedge", e.x, "pincer", undefined, e.y + 16, 120, undefined, WORLD_H * 0.26);
+    const phase = phaseIndex(e.ch, ratio);
+    if (phase !== e.mark) {
+      e.mark = phase;
+      e.fire = 0.8;
+      const line = BOSS_LINES[e.ch];
+      w.banner = phase >= 3 ? "ECLIPSE" : line ? line[0] : "PHASE";
+      w.bannerT = 0.8;
+      cashBullets(w);
     }
     return;
   }
@@ -1593,12 +2004,101 @@ function moveEnemy(w: World, e: Enemy, dt: number) {
     contain(e);
     return;
   }
+  if (e.motion === "conga" || e.motion === "rain" || e.role === "bonus") {
+    e.y += (e.motion === "rain" ? 200 : 130) * dt;
+    e.x += Math.sin(e.t * 2 + e.spin) * 40 * dt;
+    if (e.y > WORLD_H + 40) e.hp = 0;
+    return;
+  }
+  if (e.motion === "dive") {
+    e.warn = Math.max(0, e.warn - dt);
+    if (e.warn > 0) return;
+    const who = nearestPilot(w, e.x, e.y);
+    e.x += Math.sign(who.x - e.x || 1) * 160 * dt;
+    e.y += 220 * dt;
+    if (e.y > WORLD_H + 20) {
+      e.y = -24;
+      e.motion = "rank";
+      e.x = e.ox;
+    }
+    return;
+  }
   if (e.y < goal - 2) e.y += 120 * dt;
   else e.y += (goal - e.y) * Math.min(1, 5 * dt);
   const amp = e.motion === "swoop" ? 36 : e.motion === "sine" ? 16 : 4;
   const sway = Math.sin(e.t * (e.motion === "swoop" ? 1.25 : 0.8) + e.spin) * amp;
   e.x = e.ox + w.formX + sway;
+  if ((e.motion === "rank" || e.motion === "swoop") && e.kind !== "boss" && e.role !== "bonus") {
+    const { d } = { d: Math.max(0, (w.level - 4) / 96) };
+    const chance = w.level < 4 ? 0 : 0.1 + 0.25 * d;
+    if (w.rng() < chance * dt * 0.15) {
+      e.motion = "dive";
+      e.warn = 0.4;
+      e.flash = 0.4;
+    }
+  }
   contain(e);
+}
+
+function stepHazards(w: World, dt: number) {
+  for (const h of w.hazards) {
+    h.t -= dt;
+    h.x += h.vx * dt;
+    h.y += h.vy * dt;
+    if (h.kind === "pane") {
+      if (h.y > WORLD_H + 40) h.y = -80;
+      for (const b of w.bullets) {
+        if (b.life <= 0) continue;
+        if (Math.abs(b.x - h.x) < h.w / 2 && Math.abs(b.y - h.y) < h.h / 2) {
+          b.life = 0;
+          h.hp -= 1;
+        }
+      }
+      if (h.hp <= 0) {
+        bank(w, 5, h.x, h.y, true);
+        h.kind = "dead";
+      }
+    } else if (h.kind === "goo") {
+      if (h.y > WORLD_H + 20) h.y = -30;
+      for (const p of living(w)) {
+        if (Math.hypot(p.x - h.x, p.y - h.y) < 28) {
+          p.slow = 2;
+          float(w, p.x, p.y - 18, "STICKY!");
+        }
+      }
+    } else if (h.kind === "flare" && h.t < 0 && h.t > -1.5) {
+      for (const p of living(w)) if (Math.abs(p.y - h.y) < h.h / 2 && p.inv <= 0) hurtPlayer(w, p);
+    } else if (h.kind === "bolt" && h.t < 0 && h.t > -0.2) {
+      for (const p of living(w)) if (Math.abs(p.x - h.x) < h.w && p.inv <= 0) hurtPlayer(w, p);
+    } else if (h.kind === "cloud") {
+      if (h.x > WORLD_W + 40) h.x = -40;
+      if (h.phase <= 0) {
+        for (const e of w.enemies) {
+          if (Math.hypot(e.x - h.x, e.y - h.y) < 60) e.hp = Math.min(e.max, e.hp + e.max * 0.1 * dt);
+        }
+      } else h.phase -= dt;
+    } else if (h.kind === "rocks" && h.t < 0 && h.phase === 0) {
+      h.phase = 1;
+      w.banner = "ROCKS INBOUND";
+      w.bannerT = 1;
+      for (let i = 0; i < 5; i++) spawnEnemy(w, "dart", 40 + i * (WORLD_W / 6), "rain", undefined, -20, 30, i, 0, 0, "rain");
+    } else if (h.kind === "eclipse") {
+      if (h.t < 0) {
+        h.phase = h.phase > 0 ? 0 : 1.5;
+        h.t = 14;
+        if (h.phase > 0) {
+          w.banner = "ECLIPSE";
+          w.bannerT = 1;
+        }
+      }
+    }
+  }
+  w.hazards = w.hazards.filter((h) => h.kind !== "dead");
+  for (const b of w.bullets) {
+    if (b.friendly && b.style === 2) {
+      for (const h of w.hazards) if (h.kind === "cloud" && Math.hypot(b.x - h.x, b.y - h.y) < 50) h.phase = 3;
+    }
+  }
 }
 
 function edgeOf(kind: Kind) {
@@ -1651,7 +2151,7 @@ function drivePilot(
     ax /= mag;
     ay /= mag;
   }
-  const speed = focus ? Math.max(170, WORLD_W * 0.16) : Math.max(340, WORLD_W * 0.46);
+  const speed = (focus ? Math.max(170, WORLD_W * 0.16) : Math.max(340, WORLD_W * 0.46)) * (p.slow > 0 ? 0.6 : 1);
   let bankTarget = ax * 0.36;
   if (!keying && pointer) {
     const dx = pointer.x - p.x;
@@ -1705,6 +2205,7 @@ export function step(w: World, dt: number, input: InputState) {
 
   if (input.bomb) detonate(w, w.player);
   else if (input.wingBomb && w.wing) detonate(w, w.wing);
+  stepHazards(w, dt);
 
   const stride = Math.min(28, WORLD_W * 0.028);
   w.formX += w.formDir * 62 * dt;
@@ -1713,29 +2214,37 @@ export function step(w: World, dt: number, input: InputState) {
 
   w.spawnClock += dt;
   if (!w.bossUp) {
-    w.spawns = w.spawns.filter((s) => {
-      if (w.spawnClock >= s.at) {
-        spawnEnemy(w, s.kind, s.x, s.motion, s.drop, -28, s.vx ?? 0, s.spin, s.oy, s.value ?? 0);
-        return false;
-      }
-      return true;
-    });
+    const cap = screenCap(WORLD_W);
+    const alive = w.enemies.reduce((n, e) => n + (e.hp > 0 ? 1 : 0), 0);
+    if (alive >= cap) w.spawnClock -= dt;
+    else {
+      w.spawns = w.spawns.filter((s) => {
+        if (w.spawnClock >= s.at) {
+          spawnEnemy(w, s.kind, s.x, s.motion, s.drop, -28, s.vx ?? 0, s.spin, s.oy, s.value ?? 0, s.role ?? "");
+          return false;
+        }
+        return true;
+      });
+    }
   }
 
   for (const e of w.enemies) {
     if (e.hp <= 0) continue;
+    if (w.freeze > 0 && e.kind !== "boss") continue;
+    if (w.freeze > 0 && e.kind === "boss" && w.freeze > 1.5) continue;
     moveEnemy(w, e, dt);
-    e.fire -= dt;
-    const m = edgeOf(e.kind);
-    const visible =
-      e.y > bodyClearance(e.kind) &&
-      e.y < WORLD_H * 0.48 &&
-      e.x >= m &&
-      e.x <= WORLD_W - m;
-    if (e.fire <= 0 && visible && (e.motion === "boss" || e.y > e.oy - 24)) {
-      e.fire = enemyShoot(w, e);
+    if (e.kind === "boss") {
+      e.fire -= dt;
+      if (e.fire <= 0 && w.freeze <= 0) {
+        runBoss(w, e);
+        e.fire = Math.max(0.7, 1.5 - e.mark * 0.2);
+      }
+    } else if (e.warn > 0) {
+      e.warn -= dt;
+      if (e.warn <= 0) releaseShot(w, e);
     }
   }
+  if (w.freeze <= 0) budgetShots(w, dt);
 
   for (const b of w.bullets) {
     if (b.homing && b.friendly) {
@@ -1752,6 +2261,35 @@ export function step(w: World, dt: number, input: InputState) {
         }
       }
     }
+    if (w.freeze > 0 && !b.friendly) continue;
+    b.age = (b.age ?? 0) + dt;
+    if (!b.friendly && b.shape === 12) b.vx = Math.sin((b.age ?? 0) * 10) * 80;
+    if (!b.friendly && b.shape === 13) b.vx = Math.sin((b.age ?? 0) * 6) * 50;
+    if (!b.friendly && b.shape === 6 && (b.bounces ?? 0) < 1 && (b.x < 12 || b.x > WORLD_W - 12)) {
+      b.vx *= -1;
+      b.bounces = 1;
+    }
+    if (!b.friendly && b.shape === 5 && !b.split && b.y > WORLD_H * 0.45) {
+      b.split = true;
+      b.life = 0;
+      for (const a of [-0.4, 0, 0.4]) pushHostile(w, b.x, b.y, Math.PI / 2 + a, 90, 4, 5);
+    }
+    if (!b.friendly && b.shape === 9 && !b.split && (b.age ?? 0) > 1) {
+      b.split = true;
+      b.life = 0;
+      pushHostile(w, b.x - 8, b.y, Math.PI / 2 - 0.2, 80, 4, 9);
+      pushHostile(w, b.x + 8, b.y, Math.PI / 2 + 0.2, 80, 4, 9);
+    }
+    const well = w.hazards.find((h) => h.kind === "well");
+    if (well) {
+      const dx = well.x - b.x;
+      const dy = well.y - b.y;
+      const dist = Math.hypot(dx, dy) || 1;
+      if (dist < well.w) {
+        b.vx += (dx / dist) * 80 * dt;
+        b.vy += (dy / dist) * 80 * dt;
+      }
+    }
     b.x += b.vx * dt;
     b.y += b.vy * dt;
     b.life -= dt;
@@ -1764,6 +2302,29 @@ export function step(w: World, dt: number, input: InputState) {
     for (const e of w.enemies) {
       if (e.hp <= 0) continue;
       if (Math.hypot(b.x - e.x, b.y - e.y) < e.r + b.r) {
+        if (e.role === "wall" && (b.pierce ?? 0) <= 0 && b.style !== 3 && Math.abs(b.x - e.x) < e.r * 0.65) {
+          b.vy = Math.abs(b.vy);
+          b.y = e.y + e.r + 4;
+          sparkHit(w, e, b.x, b.y);
+          break;
+        }
+        if (e.role === "forge" && e.plate > 0 && b.style !== 3 && (b.pierce ?? 0) <= 0 && b.y > e.y) {
+          e.plate -= 1;
+          b.life = 0;
+          sparkHit(w, e, b.x, b.y);
+          if (e.plate <= 0) float(w, e.x, e.y - 16, "PLATE OFF");
+          break;
+        }
+        if (e.role === "hermit" && e.hide > 0.4) {
+          b.vy = Math.abs(b.vy);
+          break;
+        }
+        if (e.role === "ghost" && Math.sin(e.t * 2.4) < 0) continue;
+        if (e.role !== "honey" && e.kind !== "boss" && w.enemies.some((h) => h.role === "honey" && h.hp > 0 && Math.hypot(h.x - e.x, h.y - e.y) < 200)) {
+          b.vy = Math.abs(b.vy);
+          sparkHit(w, e, b.x, b.y);
+          break;
+        }
         e.hp -= b.dmg;
         sparkHit(w, e, b.x, b.y);
         if ((b.splash ?? 0) > 0) {
@@ -1790,13 +2351,20 @@ export function step(w: World, dt: number, input: InputState) {
     for (const b of w.bullets) {
       if (b.friendly || b.life <= 0) continue;
       const d = Math.hypot(b.x - ship.x, b.y - ship.y);
-      if (d < hitR + b.r) {
+      if (d < hitR + b.r * 0.6) {
+        if (b.shape === 16) {
+          ship.x += Math.sign(ship.x - b.x || 1) * 60 * 0.016;
+          b.grazed = true;
+          continue;
+        }
         b.life = 0;
         hurtPlayer(w, ship);
       } else if (!b.grazed && d < 26 && w.grazeCd <= 0) {
         b.grazed = true;
         w.grazeCd = 0.045;
-        w.score += 15;
+        const bonus = b.shape === 14 ? 0 : b.shape === 15 ? 500 : 15;
+        w.score += bonus;
+        if (b.shape === 14) bank(w, 3, ship.x, ship.y, true);
         w.chainT = Math.max(w.chainT, 0.45);
         w.cues.push("graze");
         ring(w, ship.x, ship.y, "#7eb6d6", 0.16, 6, 1);
@@ -1806,6 +2374,15 @@ export function step(w: World, dt: number, input: InputState) {
       for (const e of w.enemies) {
         if (e.hp <= 0) continue;
         if (Math.hypot(e.x - ship.x, e.y - ship.y) < e.r * 0.55 + hitR) {
+          if (e.role === "bonus") {
+            if (e.mark === 0) {
+              e.mark = 1;
+              ship.x += Math.sign(ship.x - e.x || 1) * 28;
+              if (!w.arcade) w.meta.dollars = Math.max(0, w.meta.dollars - 10);
+              float(w, ship.x, ship.y - 20, "-$10 · RUDE");
+            }
+            continue;
+          }
           if (e.kind !== "boss") e.hp = 0;
           hurtPlayer(w, ship);
         }
@@ -1838,16 +2415,67 @@ export function step(w: World, dt: number, input: InputState) {
 function finishLevel(w: World) {
   if (w.mode !== "play") return;
   w.pickups = w.pickups.filter((pk) => pk.y > 9000);
-  const bonus = Math.round((16 + w.level * 3) * (w.perfect ? 1.55 : 1) * salvageMul(w.meta.upgrades.salvage));
-  w.meta.dollars += bonus;
-  w.clearCash = bonus;
+  const noBomb = w.bombsUsed === 0;
+  const boss = isBossLevel(w.level);
+  const fast = boss && w.clock <= fastKillLimit(w.level);
+  if (w.perfect && w.arcade) w.score += 5000;
+  if (fast) {
+    const tip = 40 + w.level * 2;
+    w.score += tip;
+    float(w, WORLD_W / 2, 120, `FAST KILL +$${tip}`, true);
+  }
+  if (noBomb) w.banner = "NO BOMB";
+  const slot = ((w.level - 1) % 10) + 1;
+  if (!boss && slot === 5 && w.born > 0 && w.slain >= w.born) {
+    w.banner = `PERFECT! ${w.slain}/${w.born}`;
+    w.score += 150;
+    if (w.arcade) w.purse += 75;
+    else w.meta.dollars += 150;
+    if (w.player.weapon < 6) w.player.weapon += 1;
+    else w.player.feed = 6.5;
+  } else if (!boss && slot === 5) {
+    w.banner = `${w.slain}/${w.born}`;
+  }
+  const bonus = clearCash(w.level, w.perfect, noBomb, w.arcade ? 0 : w.meta.upgrades.salvage, w.replay);
+  if (w.arcade) w.purse += Math.round(bonus * 0.5);
+  else w.meta.dollars += bonus;
+  w.clearCash = w.arcade ? Math.round(bonus * 0.5) : bonus;
   if (w.perfect) w.score += 400;
+  const earned = starsOf(w.perfect, noBomb, w.slain, Math.max(1, w.born), fast, boss);
+  w.starShow = `${"★".repeat(earned)}${"☆".repeat(Math.max(0, 3 - earned))}`;
+  if (!w.arcade) w.meta.stars[w.level] = Math.max(w.meta.stars[w.level] ?? 0, earned);
+  grantStars(w.meta);
   if (w.score > w.best) {
     w.best = w.score;
     w.record = true;
   }
   w.meta.best = Math.max(w.meta.best, w.best);
   w.bannerT = 0;
+  if (w.arcade) {
+    if (w.arcadeStage >= 30 || w.level >= LEVELS) {
+      const pay = Math.round(w.purse);
+      w.meta.dollars += pay;
+      w.clearCash = pay;
+      pushRank(w);
+      w.mode = "arcadeover";
+      const frontier = w.pinned;
+      w.pinned = null;
+      if (frontier != null) w.meta.level = frontier;
+      persist(w, w.snap);
+      w.pinned = frontier;
+      return;
+    }
+    w.mode = "bridge";
+    w.bridgeT = 1.4;
+    return;
+  }
+  if (w.pinned != null) {
+    w.mode = "bridge";
+    w.bridgeT = 2.5;
+    w.meta.level = w.pinned;
+    persist(w, w.snap);
+    return;
+  }
   if (w.level >= LEVELS) {
     w.meta.cleared = true;
     w.meta.level = LEVELS;
@@ -1864,7 +2492,7 @@ function finishLevel(w: World) {
     }
     persist(w, {
       level: w.level + 1,
-      lives: kit.lives,
+      lives: Math.max(w.player.lives, 1),
       weapon: Math.max(w.player.weapon, kit.weapon),
       bombs: Math.max(w.player.bombs, kit.bombs),
       shield: w.player.shield,
@@ -1872,12 +2500,60 @@ function finishLevel(w: World) {
       feed: w.player.feed,
       coop: w.coop,
       missiles: Math.max(w.player.missiles, w.wing?.missiles ?? 0, kit.missiles),
+      family: w.player.family,
+      snacks: Math.floor(w.snacks),
     });
   }
 }
 
+function pushRank(w: World) {
+  const row = {
+    name: "YOU",
+    score: w.score,
+    stage: w.arcadeStage,
+    date: daySeed().key,
+    skin: w.meta.skin,
+  };
+  w.meta.ranks = [...w.meta.ranks, row].sort((a, b) => b.score - a.score).slice(0, 10);
+  const today = daySeed();
+  if (w.daily && w.meta.dailyDay !== today.key) {
+    w.meta.dailyDay = today.key;
+    w.meta.dailyScore = w.score;
+  }
+}
+
+export function startArcade(w: World, daily = false) {
+  const frontier = w.pinned ?? w.meta.level;
+  w.pinned = frontier;
+  w.arcade = true;
+  w.daily = daily;
+  w.arcadeStage = 1;
+  w.purse = 0;
+  w.coop = false;
+  w.lifePaid = 0;
+  w.score = 0;
+  const today = daySeed();
+  w.seed = daily ? today.seed : (Math.random() * 1e9) | 0;
+  const spec = arcadeStage(1);
+  startSortie(w, { level: spec.level, lives: 3, weapon: 1, bombs: 2, shield: false, score: 0, feed: 0, coop: false, missiles: 0, family: "pulse", snacks: w.snacks });
+  w.pinned = frontier;
+  w.meta.level = frontier;
+  persist(w, w.snap);
+}
+
 export function skipBridge(w: World) {
   if (w.mode !== "bridge") return;
+  if (w.arcade) {
+    nextLevel(w);
+    return;
+  }
+  if (w.pinned != null) {
+    w.meta.level = w.pinned;
+    w.pinned = null;
+    w.mode = "levels";
+    persist(w, w.snap);
+    return;
+  }
   nextLevel(w);
 }
 

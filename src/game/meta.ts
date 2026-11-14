@@ -1,10 +1,12 @@
+import { type GunFamily, familyName } from "./v3";
+
 export const LEVELS = 100;
 export const SAVE_V2 = "wingbreaker.save.v2";
 export const SAVE_KEY = "wingbreaker.save.v3";
 const LEGACY_BEST = "wingbreaker.best.v1";
 
-export type SkinId = "steel" | "ember" | "navy" | "graphite" | "bone";
-export type UpgradeId = "hull" | "magazine" | "capacitor" | "magnet" | "salvage" | "trigger" | "wings" | "luck" | "salvo";
+export type SkinId = "steel" | "ember" | "navy" | "graphite" | "bone" | "duck" | "toaster" | "tub" | "toilet" | "throne";
+export type UpgradeId = "hull" | "magazine" | "capacitor" | "magnet" | "salvage" | "trigger" | "wings" | "luck" | "salvo" | "insurance" | "pockets";
 
 export type Upgrades = Record<UpgradeId, number>;
 
@@ -21,7 +23,19 @@ export type Campaign = {
   autoNext: boolean;
   autoFire: boolean | null;
   crew: "solo" | "coop";
+  music: number;
+  sfx: number;
+  gun: GunFamily;
+  guns: GunFamily[];
+  stars: number[];
+  seen: string[];
+  snacks: number;
+  ranks: Rank[];
+  dailyDay: string;
+  dailyScore: number;
 };
+
+export type Rank = { name: string; score: number; stage: number; date: string; skin: string; daily?: boolean };
 
 export type RunSnap = {
   level: number;
@@ -33,6 +47,8 @@ export type RunSnap = {
   feed: number;
   coop?: boolean;
   missiles?: number;
+  family?: GunFamily;
+  snacks?: number;
 };
 
 export type SaveFile = {
@@ -80,6 +96,11 @@ export const SKINS: SkinDef[] = [
   { id: "navy", name: "Navy", price: 640, hull: "#8fb4cc", edge: "#1e3a52", canopy: "#d5e6f2", hot: "#e7f2f8" },
   { id: "graphite", name: "Graphite", price: 480, hull: "#9aa1a8", edge: "#2a2e33", canopy: "#e07a3d", hot: "#d5dbe2" },
   { id: "bone", name: "Bone", price: 980, hull: "#e6e1d6", edge: "#8a8175", canopy: "#c44536", hot: "#f4f1ea" },
+  { id: "duck", name: "Rubber Duck", price: 1800, hull: "#f2d24a", edge: "#c49214", canopy: "#fff3a8", hot: "#fff7c8" },
+  { id: "toaster", name: "Toaster", price: 2400, hull: "#d9dde2", edge: "#5c656e", canopy: "#e07a3d", hot: "#f4e7c2" },
+  { id: "tub", name: "Bathtub", price: 3200, hull: "#e7eef2", edge: "#7d8b96", canopy: "#9ed0ea", hot: "#f7fbff" },
+  { id: "toilet", name: "Flying Toilet", price: 4500, hull: "#f4f7f8", edge: "#8a9298", canopy: "#7eb6d6", hot: "#fff" },
+  { id: "throne", name: "Golden Throne", price: 0, hull: "#e2b84a", edge: "#8a6420", canopy: "#fff1b8", hot: "#ffe38a" },
 ];
 
 export const UPGRADE_LIST: { id: UpgradeId; name: string; blurb: string; max: number; prices: number[] }[] = [
@@ -92,6 +113,8 @@ export const UPGRADE_LIST: { id: UpgradeId; name: string; blurb: string; max: nu
   { id: "magazine", name: "Locker", blurb: "+1 bomb at the start of a level.", max: 2, prices: [300, 680] },
   { id: "salvo", name: "Salvo", blurb: "Start each level with homing missiles.", max: 2, prices: [260, 640] },
   { id: "hull", name: "Hull", blurb: "+1 life at the start of a level.", max: 2, prices: [400, 920] },
+  { id: "insurance", name: "Insurance", blurb: "First hit each level keeps your gun rank.", max: 1, prices: [1200] },
+  { id: "pockets", name: "Bigger Pockets", blurb: "Snacks count for more.", max: 2, prices: [500, 1100] },
 ];
 
 export const QUIPS = [
@@ -174,6 +197,22 @@ export const FAUNA = [
   "Clock Slug",
   "Buoy Leech",
   "Probe Egg",
+  "Ring Snail",
+  "Comet Pup",
+  "Prism Shrimp",
+  "Helmet Mole",
+  "Aurora Penguin",
+  "Void Hippo",
+  "Flare Seahorse",
+  "Twin Lizard",
+  "Spore Squid",
+  "Gear Moth",
+  "Crater Toad",
+  "Dish Eel",
+  "Nova Beetle",
+  "Comet Chick",
+  "Orbit Otter",
+  "Magnet Ray",
 ];
 
 export function quipFor(level: number) {
@@ -188,12 +227,22 @@ export function freshCampaign(): Campaign {
     cleared: false,
     skin: "steel",
     owned: ["steel"],
-    upgrades: { hull: 0, magazine: 0, capacitor: 0, magnet: 0, salvage: 0, trigger: 0, wings: 0, luck: 0, salvo: 0 },
+    upgrades: { hull: 0, magazine: 0, capacitor: 0, magnet: 0, salvage: 0, trigger: 0, wings: 0, luck: 0, salvo: 0, insurance: 0, pockets: 0 },
     mute: false,
     shake: true,
     autoNext: true,
     autoFire: null,
     crew: "solo",
+    music: 55,
+    sfx: 80,
+    gun: "pulse",
+    guns: ["pulse"],
+    stars: Array(LEVELS + 1).fill(0),
+    seen: [],
+    snacks: 0,
+    ranks: [],
+    dailyDay: "",
+    dailyScore: 0,
   };
 }
 
@@ -265,13 +314,38 @@ function sanitize(raw: Partial<Campaign> | null | undefined, legacyBest: number)
       wings: clampInt(up.wings, 0, 2, 0),
       luck: clampInt(up.luck, 0, 2, 0),
       salvo: clampInt(up.salvo, 0, 2, 0),
+      insurance: clampInt(up.insurance, 0, 1, 0),
+      pockets: clampInt(up.pockets, 0, 2, 0),
     },
     mute: Boolean(raw.mute),
     shake: raw.shake !== false,
     autoNext: raw.autoNext !== false,
     autoFire: typeof raw.autoFire === "boolean" ? raw.autoFire : null,
     crew: raw.crew === "coop" ? "coop" : "solo",
+    music: clampInt(raw.music, 0, 100, 55),
+    sfx: clampInt(raw.sfx, 0, 100, 80),
+    gun: raw.gun === "neutron" || raw.gun === "lance" ? raw.gun : "pulse",
+    guns: (() => {
+      const list: GunFamily[] = Array.isArray(raw.guns)
+        ? raw.guns.filter((g): g is GunFamily => g === "pulse" || g === "neutron" || g === "lance")
+        : ["pulse"];
+      if (!list.includes("pulse")) list.unshift("pulse");
+      return list;
+    })(),
+    stars: sanitizeStars(raw.stars),
+    seen: Array.isArray(raw.seen) ? raw.seen.filter((s) => typeof s === "string").slice(0, 80) : [],
+    snacks: clampInt(raw.snacks, 0, 100000, 0),
+    ranks: Array.isArray(raw.ranks) ? raw.ranks.slice(0, 10).filter((r) => r && typeof r.score === "number") : [],
+    dailyDay: typeof raw.dailyDay === "string" ? raw.dailyDay : "",
+    dailyScore: clampInt(raw.dailyScore, 0, 99_999_999, 0),
   };
+}
+
+function sanitizeStars(raw: unknown) {
+  const out = Array(LEVELS + 1).fill(0);
+  if (!Array.isArray(raw)) return out;
+  for (let i = 0; i < out.length; i++) out[i] = clampInt(raw[i], 0, 3, 0);
+  return out;
 }
 
 function sanitizeRun(raw: RunSnap | null | undefined): RunSnap | null {
@@ -286,6 +360,8 @@ function sanitizeRun(raw: RunSnap | null | undefined): RunSnap | null {
     feed: Math.max(0, Math.min(12, Number(raw.feed) || 0)),
     coop: Boolean(raw.coop),
     missiles: clampInt(raw.missiles, 0, 9, 0),
+    family: raw.family === "neutron" || raw.family === "lance" ? raw.family : "pulse",
+    snacks: clampInt(raw.snacks, 0, 100000, 0),
   };
 }
 
@@ -341,6 +417,7 @@ export function buyUpgrade(c: Campaign, id: UpgradeId): "ok" | "max" | "poor" {
 export function buySkin(c: Campaign, id: SkinId): "ok" | "owned" | "poor" {
   if (c.owned.includes(id)) return "owned";
   const def = skinDef(id);
+  if (def.price <= 0) return "poor";
   if (c.dollars < def.price) return "poor";
   c.dollars -= def.price;
   c.owned.push(id);
@@ -364,13 +441,42 @@ export function loadoutOf(c: Campaign) {
   return {
     lives: 3 + c.upgrades.hull,
     bombs: 2 + c.upgrades.magazine,
-    weapon: Math.min(5, 1 + cap + wings),
+    weapon: Math.min(6, 1 + cap + wings),
     missiles: Math.min(6, (c.upgrades.salvo || 0) * 2),
+    family: c.gun,
   };
+}
+
+export function starTotal(c: Campaign) {
+  return c.stars.reduce((a, b) => a + b, 0);
+}
+
+export function grantStars(c: Campaign) {
+  const n = starTotal(c);
+  if (n >= 30 && !c.owned.includes("graphite")) c.owned.push("graphite");
+  if ((n >= 250 || c.cleared) && !c.owned.includes("throne")) c.owned.push("throne");
+}
+
+export function buyGun(c: Campaign, family: GunFamily): "ok" | "poor" {
+  if (family === "pulse" || c.guns.includes(family)) {
+    c.gun = family;
+    return "ok";
+  }
+  if (c.dollars < 600) return "poor";
+  c.dollars -= 600;
+  c.guns.push(family);
+  c.gun = family;
+  return "ok";
+}
+
+export function equipGun(c: Campaign, family: GunFamily) {
+  if (family !== "pulse" && !c.guns.includes(family)) return false;
+  c.gun = family;
+  return true;
 }
 
 export const GUNS = ["PULSE", "TWIN", "TRIO", "FAN", "NEUTRON", "LANCE"] as const;
 
-export function gunName(level: number) {
-  return GUNS[Math.max(0, Math.min(GUNS.length - 1, Math.round(level) - 1))] ?? "PULSE";
+export function gunName(level: number, family: GunFamily = "pulse") {
+  return familyName(family, Math.max(1, Math.min(6, Math.round(level) || 1)), false);
 }

@@ -1,6 +1,7 @@
 export class Sfx {
   private ctx: AudioContext | null = null;
   muted = false;
+  volume = 1;
   private lastShot = 0;
   private lastGraze = 0;
   private lastArmor = 0;
@@ -16,6 +17,11 @@ export class Sfx {
     if (this.ctx.state === "suspended") void this.ctx.resume();
   }
 
+  context() {
+    this.unlock();
+    return this.ctx;
+  }
+
   private tone(freq: number, dur: number, type: OscillatorType, gain: number, slide = 0, pan = 0) {
     if (this.muted || !this.ctx) return;
     const t = this.ctx.currentTime;
@@ -24,7 +30,7 @@ export class Sfx {
     osc.type = type;
     osc.frequency.setValueAtTime(Math.max(40, freq), t);
     if (slide) osc.frequency.exponentialRampToValueAtTime(Math.max(40, freq + slide), t + dur);
-    g.gain.setValueAtTime(gain, t);
+    g.gain.setValueAtTime(gain * this.volume, t);
     g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
     osc.connect(g);
     const dest = this.pan(pan);
@@ -59,7 +65,7 @@ export class Sfx {
     filter.frequency.value = cutoff;
     const g = this.ctx.createGain();
     const t = this.ctx.currentTime;
-    g.gain.setValueAtTime(gain, t);
+    g.gain.setValueAtTime(gain * this.volume, t);
     g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
     src.connect(filter);
     filter.connect(g);
@@ -177,31 +183,7 @@ export class Sfx {
     this.tone(784, 0.12, "triangle", 0.03);
   }
 
-  drone(on: boolean) {
-    this.unlock();
-    if (!this.ctx) return;
-    if (!this.drones.length) {
-      const gain = this.ctx.createGain();
-      gain.gain.value = 0.0001;
-      gain.connect(this.ctx.destination);
-      this.droneGain = gain;
-      for (const [f, v] of [
-        [55, 0.65],
-        [82.5, 0.22],
-        [110, 0.18],
-      ] as const) {
-        const o = this.ctx.createOscillator();
-        o.type = "sine";
-        o.frequency.value = f;
-        const g = this.ctx.createGain();
-        g.gain.value = v;
-        o.connect(g);
-        g.connect(gain);
-        o.start();
-        this.drones.push(o);
-      }
-    }
-    const target = on && !this.muted ? 0.02 : 0.0001;
-    this.droneGain?.gain.setTargetAtTime(target, this.ctx.currentTime, 0.12);
+  drone(_on: boolean) {
+    /* replaced by the chapter sequencer */
   }
 }

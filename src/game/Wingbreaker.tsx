@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { DollarSign } from "lucide-react";
 import { Sfx } from "./audio";
-import { chapterOf, quipFor, SKINS, UPGRADE_LIST, type SkinId, type UpgradeId } from "./meta";
+import { Music } from "./music";
+import { chapterOf, CHAPTERS, quipFor, SKINS, UPGRADE_LIST, starTotal, type SkinId, type UpgradeId } from "./meta";
+import { CREDITS, GUIDE, TIPS, daySeed, type GunFamily } from "./v3";
 import { ACTIONS, codeLabel, DEFAULT_BINDS, loadBinds, saveBinds, type Action, type Binds } from "./controls";
 import { drawWorld } from "./render";
 import {
@@ -25,12 +27,19 @@ import {
   setReduceMotion,
   setShake,
   skipBridge,
+  startArcade,
+  setMusic,
+  setSfx,
+  purchaseGun,
   step,
   fitWorld,
   newMission,
   purchaseSkin,
   purchaseUpgrade,
   wearSkin,
+  practiceLevel,
+  stampRank,
+  leaveRun,
   type InputState,
   type Mode,
   type World,
@@ -59,6 +68,18 @@ type Ui = {
   quip: string;
   autoFire: boolean;
   autoNext: boolean;
+  stars: number;
+  music: number;
+  sfx: number;
+  deathLine: string;
+  starLine: string;
+  seen: string[];
+  starsGrid: number[];
+  ranks: { name: string; score: number; stage: number; date: string }[];
+  gun: GunFamily;
+  guns: GunFamily[];
+  arcadeStage: number;
+  dailyPlayed: boolean;
 };
 
 function readUi(world: World, muted: boolean): Ui {
@@ -86,6 +107,18 @@ function readUi(world: World, muted: boolean): Ui {
     quip: quipFor(world.level),
     autoFire: world.meta.autoFire === true,
     autoNext: world.meta.autoNext !== false,
+    stars: starTotal(world.meta),
+    music: world.meta.music,
+    sfx: world.meta.sfx,
+    deathLine: world.deathLine,
+    starLine: world.starShow,
+    seen: world.meta.seen.slice(),
+    starsGrid: world.meta.stars.slice(),
+    ranks: world.meta.ranks.map((r) => ({ name: r.name, score: r.score, stage: r.stage, date: r.date })),
+    gun: world.meta.gun,
+    guns: world.meta.guns.slice(),
+    arcadeStage: world.arcadeStage,
+    dailyPlayed: world.meta.dailyDay === daySeed().key && world.meta.dailyScore > 0,
   };
 }
 
@@ -133,12 +166,24 @@ export function Wingbreaker() {
     hasSave: false,
     skin: "steel",
     owned: ["steel"],
-    upgrades: { hull: 0, magazine: 0, capacitor: 0, magnet: 0, salvage: 0, trigger: 0, wings: 0, luck: 0, salvo: 0 },
+    upgrades: { hull: 0, magazine: 0, capacitor: 0, magnet: 0, salvage: 0, trigger: 0, wings: 0, luck: 0, salvo: 0, insurance: 0, pockets: 0 },
     cleared: false,
     lockShake: false,
     quip: quipFor(1),
     autoFire: false,
     autoNext: true,
+    stars: 0,
+    music: 55,
+    sfx: 80,
+    deathLine: "",
+    starLine: "",
+    seen: [],
+    starsGrid: [],
+    ranks: [],
+    gun: "pulse",
+    guns: ["pulse"],
+    arcadeStage: 0,
+    dailyPlayed: false,
   });
   const [touch, setTouch] = useState(false);
   const [notice, setNotice] = useState("");
@@ -146,13 +191,24 @@ export function Wingbreaker() {
   const [pick, setPick] = useState(false);
   const [binds, setBinds] = useState<Binds>(() => loadBinds());
   const [capture, setCapture] = useState<Action | null>(null);
+  const [guideId, setGuideId] = useState("dart");
+  const [initials, setInitials] = useState("AAA");
+  const [tip, setTip] = useState(TIPS[0]);
   const touchFireRef = useRef(false);
   const bindsRef = useRef(binds);
   const captureRef = useRef<Action | null>(null);
   const pickRef = useRef(false);
+  const initialsRef = useRef("AAA");
+  const letterAt = useRef(0);
+  const musicRef = useRef<Music | null>(null);
   bindsRef.current = binds;
   captureRef.current = capture;
   pickRef.current = pick;
+  initialsRef.current = initials;
+
+  useEffect(() => {
+    setTip(TIPS[Math.floor(Math.random() * TIPS.length)] ?? TIPS[0]);
+  }, []);
 
   useEffect(() => {
     const coarse = window.matchMedia("(pointer: coarse)").matches;
@@ -169,7 +225,11 @@ export function Wingbreaker() {
     ensureAutoFire(world, coarse);
     const sfx = new Sfx();
     sfx.muted = world.meta.mute;
+    sfx.volume = world.meta.sfx / 100;
     sfxRef.current = sfx;
+    const music = new Music();
+    music.volume = world.meta.music / 100;
+    musicRef.current = music;
     world.lockShake = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     world.reduce = world.lockShake || !world.meta.shake;
 
@@ -306,6 +366,18 @@ export function Wingbreaker() {
       if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Space"].includes(e.code)) e.preventDefault();
       if (e.code === "Enter") {
         sfx.unlock();
+        const ctx = sfx.context();
+        if (ctx) music.attach(ctx);
+        if (world.mode === "arcadeover") {
+          if (letterAt.current < 2) {
+            letterAt.current += 1;
+          } else {
+            stampRank(world, initialsRef.current);
+            leaveRun(world);
+          }
+          sync();
+          return;
+        }
         if (world.mode === "menu") {
           setPick(false);
           chooseCrew(world, world.meta.crew === "coop" ? "coop" : "solo");
@@ -330,6 +402,34 @@ export function Wingbreaker() {
           sync();
           return;
         }
+      }
+      if (world.mode === "arcadeover" && (e.code === "ArrowUp" || e.code === "ArrowDown")) {
+        e.preventDefault();
+        const chars = initialsRef.current.padEnd(3, "A").slice(0, 3).split("");
+        const i = letterAt.current;
+        const code = chars[i]?.charCodeAt(0) ?? 65;
+        const dir = e.code === "ArrowUp" ? 1 : -1;
+        chars[i] = String.fromCharCode((((code - 65 + dir) % 26) + 26) % 26 + 65);
+        const next = chars.join("");
+        initialsRef.current = next;
+        setInitials(next);
+        return;
+      }
+      if (world.mode === "arcadeover" && (e.code === "ArrowRight" || e.code === "ArrowLeft")) {
+        letterAt.current = (letterAt.current + (e.code === "ArrowRight" ? 1 : 2)) % 3;
+        return;
+      }
+      if (import.meta.env.DEV && e.code === "F9") {
+        world.dev = !world.dev;
+        sync();
+        return;
+      }
+      if (import.meta.env.DEV && e.code === "F8") {
+        world.god = !world.god;
+        setNotice(world.god ? "GOD ON" : "GOD OFF");
+        window.setTimeout(() => setNotice(""), 800);
+        sync();
+        return;
       }
       if (e.code === "KeyF" && world.mode === "play") {
         const on = world.meta.autoFire !== true;
@@ -363,7 +463,9 @@ export function Wingbreaker() {
     const onVis = () => {
       if (document.hidden) {
         held.clear();
+        if (world.mode === "play") world.mode = "pause";
         saveNow(world);
+        sync();
       }
     };
     window.addEventListener("keydown", onKeyDown);
@@ -449,13 +551,17 @@ export function Wingbreaker() {
         else if (cue === "pickup") sfx.pickup();
         else if (cue === "hurt") sfx.hurt();
         else if (cue === "shield") sfx.shield();
-        else if (cue === "bomb") sfx.bomb();
+        else if (cue === "bomb") {
+          sfx.bomb();
+          music.duck();
+        }
         else if (cue === "wave") sfx.wave();
         else if (cue === "boss") sfx.boss();
         else if (cue === "clean") sfx.clean();
         else if (cue === "drive") sfx.drive();
         else if (cue === "missile") sfx.missile();
         else if (cue === "plink") sfx.plink(plinkN++);
+        else if (cue === "hurt") music.duck();
       }
       world.cues.length = 0;
       if (big) sfx.kill(true);
@@ -472,6 +578,17 @@ export function Wingbreaker() {
       const keys = effective();
       drawWorld(ctx, world, keys.has("ShiftLeft") || keys.has("ShiftRight"));
       ctx.restore();
+
+      const audio = sfx.context();
+      if (audio) music.attach(audio);
+      const muted = world.meta.mute;
+      sfx.volume = muted ? 0 : world.meta.sfx / 100;
+      music.setVolume(muted ? 0 : world.meta.music / 100);
+      const menuish = world.mode === "menu" || world.mode === "shop" || world.mode === "options" || world.mode === "levels" || world.mode === "guide" || world.mode === "ranks";
+      const live = world.mode === "play" || world.mode === "bridge" || world.mode === "pause" || world.mode === "clear";
+      if (!muted && world.meta.music > 0 && (menuish || live)) music.play(Math.floor((Math.max(1, world.level) - 1) / 10) + 1, world.bossUp && world.mode === "play", menuish);
+      else music.stop();
+      if (audio) music.tick(audio.currentTime, world.enemies.length, ((world.level - 1) % 10) + 1 === 9);
 
       hudAcc += delta;
       if (world.mode !== lastMode || hudAcc > 0.15) {
@@ -503,6 +620,7 @@ export function Wingbreaker() {
       canvas.removeEventListener("pointercancel", onPointerUp);
       canvas.removeEventListener("pointerleave", onPointerLeave);
       sfx.drone(false);
+      music.stop();
       if (import.meta.env.DEV) delete window.__controlsTest;
     };
   }, []);
@@ -539,7 +657,7 @@ export function Wingbreaker() {
 
       {ui.mode === "menu" && (
         <div className="absolute inset-0 z-20 overflow-y-auto">
-          <div className="mx-auto flex min-h-full w-[min(92vw,420px)] flex-col justify-center gap-2 px-5 pt-20 pb-10">
+          <div className="mx-auto flex w-[min(92vw,420px)] flex-col gap-2 px-5 pt-16 pb-16">
             <p className="font-display text-sm tracking-[0.42em] text-muted">VERTICAL SORTIE</p>
             <h1 className="font-display pr-16 text-5xl font-semibold tracking-wide text-ink sm:text-6xl">WINGBREAKER</h1>
             <div className="my-3 h-px w-16 bg-ember" />
@@ -548,11 +666,12 @@ export function Wingbreaker() {
               {ui.cleared ? " · watch broken" : ""}
             </p>
             {ui.best > 0 && <p className="font-display text-lg text-cold">BEST {String(ui.best).padStart(6, "0")}</p>}
+            <p className="font-display text-sm tracking-[0.18em] text-ember">{ui.stars} ★</p>
             <div className="mt-4 flex flex-col gap-2">
               <button
                 type="button"
                 className={row}
-                onClick={() => act((w) => chooseCrew(w, w.meta.crew === "coop" ? "coop" : "solo"))}
+                onClick={() => setPick(true)}
               >
                 <span>{ui.hasSave ? "CONTINUE" : "CAMPAIGN"}</span>
                 <span className="text-sm text-muted">
@@ -562,6 +681,21 @@ export function Wingbreaker() {
               <button type="button" className="self-start text-xs tracking-[0.16em] text-muted underline" onClick={() => setPick(true)}>
                 change
               </button>
+              <button type="button" className={row} onClick={() => act((w) => openMode(w, "levels"))}>
+                <span>LEVELS</span>
+                <span className="text-sm text-muted">STARS</span>
+              </button>
+              <button type="button" className={row} onClick={() => act((w) => startArcade(w, false))}>
+                <span>ARCADE</span>
+                <span className="text-sm text-muted">30 STAGES</span>
+              </button>
+              <button type="button" className={row} onClick={() => act((w) => startArcade(w, true))}>
+                <span>DAILY SORTIE</span>
+                <span className="text-sm text-muted">{ui.dailyPlayed ? "TRAINING" : "ONE OFFICIAL"}</span>
+              </button>
+              <button type="button" className={row} onClick={() => act((w) => openMode(w, "ranks"))}>
+                <span>RANKS</span>
+              </button>
               <button type="button" className={row} onClick={() => act((w) => openMode(w, "shop"))}>
                 <span>SHOP</span>
               </button>
@@ -569,7 +703,8 @@ export function Wingbreaker() {
                 <span>OPTIONS</span>
               </button>
             </div>
-            <p className="mt-4 text-xs leading-relaxed text-muted">
+            <p className="mt-4 text-xs leading-relaxed text-muted">{tip}</p>
+            <p className="text-xs leading-relaxed text-muted">
               {touch ? "Drag to move. AUTO fires unless you turn it off." : "Move · click or Z to shoot · Shift focus · Space bomb · P pause · F auto fire"}
             </p>
           </div>
@@ -623,6 +758,23 @@ export function Wingbreaker() {
                     <span className="block text-xs tracking-normal text-muted">{item.blurb}</span>
                   </span>
                   <span className="text-sm text-ember">{maxed ? "MAX" : `$${price}`}</span>
+                </button>
+              );
+            })}
+            <p className="mt-3 font-display text-sm tracking-[0.22em] text-muted">STARTING GUN</p>
+            {(["pulse", "neutron", "lance"] as GunFamily[]).map((family) => {
+              const owned = family === "pulse" || ui.guns.includes(family);
+              const worn = ui.gun === family;
+              return (
+                <button
+                  key={family}
+                  type="button"
+                  className={row}
+                  disabled={!owned && ui.dollars < 600}
+                  onClick={() => act((w) => purchaseGun(w, family))}
+                >
+                  <span>{family.toUpperCase()}</span>
+                  <span className="text-sm text-ember">{worn ? "EQUIPPED" : owned ? "EQUIP" : "$600"}</span>
                 </button>
               );
             })}
@@ -686,6 +838,31 @@ export function Wingbreaker() {
             <button type="button" className={row} onClick={() => act((w) => setAutoNext(w, !w.meta.autoNext))}>
               <span>AUTO NEXT</span>
               <span className="text-sm text-muted">{ui.autoNext ? "ON" : "OFF"}</span>
+            </button>
+            <label className={`${row} cursor-pointer`}>
+              <span>MUSIC</span>
+              <input
+                type="range"
+                min={0}
+                max={100}
+                value={ui.music}
+                aria-label="Music volume"
+                onChange={(e) => act((w) => setMusic(w, Number(e.target.value)))}
+              />
+            </label>
+            <label className={`${row} cursor-pointer`}>
+              <span>SFX</span>
+              <input
+                type="range"
+                min={0}
+                max={100}
+                value={ui.sfx}
+                aria-label="Effects volume"
+                onChange={(e) => act((w) => setSfx(w, Number(e.target.value)))}
+              />
+            </label>
+            <button type="button" className={row} onClick={() => act((w) => openMode(w, "guide"))}>
+              <span>FIELD GUIDE</span>
             </button>
             <p className="mt-3 font-display text-sm tracking-[0.22em] text-muted">CONTROLS</p>
             <p className="text-xs text-muted">Click a row, then press the new key. Escape cancels.</p>
@@ -763,7 +940,7 @@ export function Wingbreaker() {
             onClick={() => act((w) => skipBridge(w))}
           >
             <p className="font-display text-lg tracking-[0.08em]">
-              {ui.perfect ? "CLEAN" : "BREACH"} · +${ui.clearCash.toLocaleString("en-US")}
+              {ui.perfect ? "CLEAN" : "BREACH"} · +${ui.clearCash.toLocaleString("en-US")} · {ui.starLine || "★"}
             </p>
             <p className="mt-1 text-sm italic text-cold">{ui.quip}</p>
             <button
@@ -789,7 +966,7 @@ export function Wingbreaker() {
             </h2>
             <p className="text-sm text-muted">{ui.chapter}</p>
             <p className="text-sm italic text-cold">{ui.quip}</p>
-            <p className="font-display text-2xl text-ember">+${ui.clearCash.toLocaleString("en-US")}</p>
+            <p className="font-display text-2xl text-ember">+${ui.clearCash.toLocaleString("en-US")} {ui.starLine}</p>
             <p className="text-sm text-muted">Next: {String(ui.mission).padStart(3, "0")} · {ui.nextChapter}</p>
             <button type="button" className={row} onClick={() => act((w) => nextLevel(w))}>
               <span>{ui.level % 10 === 0 ? "NEXT CHAPTER" : "NEXT"}</span>
@@ -813,6 +990,7 @@ export function Wingbreaker() {
             <p className={`font-display text-lg ${ui.record ? "text-ember" : "text-cold"}`}>
               {ui.record ? "NEW BEST" : `BEST ${String(ui.best).padStart(6, "0")}`}
             </p>
+            <p className="text-sm italic text-cold">{ui.deathLine}</p>
             <p className="text-xs text-muted">Cash stays. Guns and lives return to the hangar kit.</p>
             <button type="button" className={row} onClick={() => act((w) => retryLevel(w))}>
               <span>AGAIN</span>
@@ -834,11 +1012,133 @@ export function Wingbreaker() {
             <h2 className="font-display text-4xl tracking-wide">WATCH BROKEN</h2>
             <p className="font-display text-3xl">{String(ui.score).padStart(6, "0")}</p>
             <p className="text-sm text-muted">The black watch does not come back. The hangar stays.</p>
+            <div className="max-h-40 space-y-1 overflow-hidden text-xs italic text-cold">
+              {CREDITS.map((line) => (
+                <p key={line}>{line}</p>
+              ))}
+            </div>
             <button type="button" className={row} onClick={() => act((w) => openMode(w, "menu"))}>
               <span>MENU</span>
             </button>
             <button type="button" className={row} onClick={() => act((w) => newMission(w))}>
               <span>NEW RUN</span>
+            </button>
+          </div>
+        </div>
+      )}
+
+      {ui.mode === "levels" && (
+        <div className="absolute inset-0 z-20 overflow-y-auto bg-bg/85">
+          <div className="mx-auto flex w-[min(96vw,720px)] flex-col gap-3 px-4 py-16">
+            <p className="font-display text-sm tracking-[0.28em] text-muted">CAMPAIGN</p>
+            <h2 className="font-display text-4xl tracking-wide">LEVELS</h2>
+            <p className="text-xs text-muted">Replays pay half. The frontier still pays full.</p>
+            {CHAPTERS.map((ch, ci) => (
+              <div key={ch.name}>
+                <p className="mb-1 font-display text-sm tracking-[0.16em] text-muted">{String(ci + 1).padStart(2, "0")} {ch.name.toUpperCase()}</p>
+                <div className="grid grid-cols-5 gap-1 sm:grid-cols-10">
+                  {Array.from({ length: 10 }, (_, k) => {
+                    const n = ci * 10 + k + 1;
+                    const stars = ui.starsGrid[n] ?? 0;
+                    const open = n <= ui.mission || stars > 0;
+                    return (
+                      <button
+                        key={n}
+                        type="button"
+                        disabled={!open}
+                        className="h-12 border border-line bg-bg/80 font-display text-xs tracking-wide text-ink disabled:opacity-30"
+                        onClick={() => act((w) => practiceLevel(w, n))}
+                      >
+                        <span className="block">{String(n).padStart(2, "0")}</span>
+                        <span className="block text-[10px] text-ember">{"★".repeat(stars)}{"☆".repeat(Math.max(0, 3 - stars))}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            ))}
+            <button type="button" className={row} onClick={() => act((w) => openMode(w, "menu"))}>
+              <span>MENU</span>
+            </button>
+          </div>
+        </div>
+      )}
+
+      {ui.mode === "guide" && (
+        <div className="absolute inset-0 z-20 overflow-y-auto bg-bg/85">
+          <div className="mx-auto flex w-[min(94vw,560px)] flex-col gap-2 px-5 py-16">
+            <h2 className="font-display text-4xl tracking-wide">FIELD GUIDE</h2>
+            <div className="grid grid-cols-2 gap-1">
+              {GUIDE.map((entry) => {
+                const known = ui.seen.includes(entry.id);
+                return (
+                  <button
+                    key={entry.id}
+                    type="button"
+                    className={`${row} h-10 text-sm ${guideId === entry.id ? "border-ember" : ""} ${known ? "" : "opacity-40"}`}
+                    onClick={() => known && setGuideId(entry.id)}
+                  >
+                    <span>{known ? entry.name : "???"}</span>
+                  </button>
+                );
+              })}
+            </div>
+            <p className="text-sm italic text-cold">{GUIDE.find((g) => g.id === guideId && ui.seen.includes(g.id))?.line ?? "Not logged yet."}</p>
+            <button type="button" className={row} onClick={() => act((w) => { w.mode = "options"; })}>
+              <span>BACK</span>
+            </button>
+          </div>
+        </div>
+      )}
+
+      {ui.mode === "ranks" && (
+        <div className="absolute inset-0 z-20 overflow-y-auto bg-bg/85">
+          <div className="mx-auto flex w-[min(92vw,420px)] flex-col gap-2 px-5 py-16">
+            <h2 className="font-display text-4xl tracking-wide">RANKS</h2>
+            {ui.ranks.length === 0 && <p className="text-sm text-muted">Nobody has crashed the arcade yet.</p>}
+            {ui.ranks.map((rank, i) => (
+              <p key={`${rank.name}-${rank.score}-${i}`} className="flex justify-between font-display text-lg">
+                <span>{i + 1} {rank.name}</span>
+                <span className="text-ember">{String(rank.score).padStart(6, "0")} · {rank.stage}</span>
+              </p>
+            ))}
+            <button type="button" className={row} onClick={() => act((w) => openMode(w, "menu"))}>
+              <span>MENU</span>
+            </button>
+          </div>
+        </div>
+      )}
+
+      {ui.mode === "arcadeover" && (
+        <div className="absolute inset-0 z-20 flex items-center justify-center bg-bg/70">
+          <div className="flex w-[min(92vw,420px)] flex-col gap-2 px-5">
+            <p className="font-display text-sm tracking-[0.28em] text-muted">ARCADE</p>
+            <p className="font-display text-5xl">{String(ui.score).padStart(6, "0")}</p>
+            <p className="text-sm text-muted">Stage {ui.arcadeStage}</p>
+            <p className="font-display text-xl text-ember">ARCADE PAYOUT +${ui.clearCash.toLocaleString("en-US")}</p>
+            <p className="text-xs text-muted">Three letters. Arrows pick a letter. Enter signs the board.</p>
+            <input
+              value={initials}
+              maxLength={3}
+              aria-label="Initials"
+              onChange={(e) => setInitials(e.target.value.toUpperCase().replace(/[^A-Z]/g, "").slice(0, 3))}
+              className="h-12 border border-line bg-bg px-3 font-display text-2xl tracking-[0.4em] text-ink"
+            />
+            <button
+              type="button"
+              className={row}
+              onClick={() => act((w) => {
+                stampRank(w, initials.padEnd(3, "A"));
+                leaveRun(w);
+              })}
+            >
+              <span>SIGN</span>
+            </button>
+            <button type="button" className={row} onClick={() => act((w) => startArcade(w, false))}>
+              <span>AGAIN</span>
+            </button>
+            <button type="button" className={row} onClick={() => act((w) => leaveRun(w))}>
+              <span>MENU</span>
             </button>
           </div>
         </div>
