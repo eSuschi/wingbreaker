@@ -1,9 +1,26 @@
-import { bossArt, lookId } from "./army";
+import { bossArt, lookId, lookName } from "./army";
 import { CHAPTERS, chapterIndex, chapterOf, gunName, skinDef, type SkinDef } from "./meta";
-import { BOSS_LINES, HONEY_RING, MIST_LIFE, STYLE, bossPhases, familyColor } from "./v3";
+import { BOSS_LINES, HONEY_RING, MIST_LIFE, STYLE, bossPhases, familyColor, type VHazard } from "./v3";
 import { drawBossCreature, drawCritter, drawLoot } from "./critters";
 import { drawHostileShot, drawStar } from "./shots";
-import { DASH_WARN, LINK_REACH, REVIVE_TIME, STRIKE_TIME, hermitHidden, podOffsets, WORLD_H, WORLD_W, type Bullet, type Enemy, type Player, type World } from "./world";
+import {
+  DASH_WARN,
+  DUEL_HP,
+  DUEL_WINS,
+  LINK_REACH,
+  REVIVE_TIME,
+  STRIKE_TIME,
+  hermitHidden,
+  podOffsets,
+  WORLD_H,
+  WORLD_W,
+  type Bullet,
+  type Enemy,
+  type Player,
+  type Pop,
+  type Splat,
+  type World,
+} from "./world";
 
 /** Team colours when two fly, so nobody has to ask which ship is theirs. */
 const TEAM = ["#ff6b4a", "#35d0c0"];
@@ -143,11 +160,13 @@ export function drawWorld(ctx: CanvasRenderingContext2D, w: World, focus: boolea
   ctx.translate(WORLD_W / 2, WORLD_H / 2);
   ctx.rotate(Math.sin(w.time * 91) * 0.012 * s);
   ctx.translate(-WORLD_W / 2, -WORLD_H / 2);
-  ctx.translate(Math.sin(w.time * 71) * 9 * s, Math.cos(w.time * 63) * 7 * s);
+  ctx.translate(Math.sin(w.time * 71) * 11 * s, Math.cos(w.time * 63) * 9 * s);
 
   drawBackdrop(ctx, w);
+  if (w.duel) drawDuelField(ctx, w);
 
-  for (const h of w.hazards) drawHazard(ctx, h, w.time);
+  for (const sp of w.splats) drawSplat(ctx, sp);
+  for (const h of w.hazards) drawHazard(ctx, h, w.time, w.level);
   if (w.hazards.some((h) => h.kind === "eclipse" && h.phase > 0)) {
     // the eclipse darkens the sky only; shots, pickups and ships stay lit on top
     ctx.fillStyle = "rgba(0,0,0,0.72)";
@@ -155,19 +174,23 @@ export function drawWorld(ctx: CanvasRenderingContext2D, w: World, focus: boolea
   }
   for (const pk of w.pickups) drawPickup(ctx, pk.kind, pk.x, pk.y, w.time, pk.hue ?? 0);
   for (const e of w.enemies) drawEnemy(ctx, e, w.time, w.player.x, w.player.y);
+  for (const p of w.pops) drawPop(ctx, p);
 
   for (const b of w.bullets) {
-    if (b.friendly) drawShot(ctx, b, w.time);
+    if (b.friendly) drawShot(ctx, b, w.time, w.duel ? TEAM[b.owner === 1 ? 1 : 0] : undefined);
   }
   drawPuffs(ctx, w);
 
   const showShip =
-    w.mode === "play" || w.mode === "pause" || w.mode === "bridge" || w.mode === "clear" || w.mode === "over" || w.mode === "victory";
+    w.mode === "play" || w.mode === "pause" || w.mode === "bridge" || w.mode === "clear" || w.mode === "over" || w.mode === "victory" || w.mode === "duelover";
   if (showShip && w.wing && w.link) drawLink(ctx, w.player, w.wing, w.time);
   if (showShip && w.player.alive) drawPlayer(ctx, w, w.player, focus, skinDef(w.meta.skin), w.meta.skin);
   if (showShip && w.wing?.alive) drawPlayer(ctx, w, w.wing, false, skinDef(w.meta.skin2), w.meta.skin2);
   if (showShip && w.player.down) drawWreck(ctx, w.player, w.meta.skin, w.time);
   if (showShip && w.wing?.down) drawWreck(ctx, w.wing, w.meta.skin2, w.time);
+
+  // the name card goes under the poop: whatever can hurt you is never hidden behind it
+  if (w.intro && (w.mode === "play" || w.mode === "pause")) drawIntro(ctx, w);
 
   for (const b of w.bullets) {
     if (!b.friendly) drawBullet(ctx, b.x, b.y, b.vx, b.vy, b.r, false, false, false, b.tint, b.shape ?? 0, 0, w.time);
@@ -211,12 +234,25 @@ export function drawWorld(ctx: CanvasRenderingContext2D, w: World, focus: boolea
   ctx.globalAlpha = 1;
   ctx.textBaseline = "alphabetic";
 
+  if (w.superT > 0) drawWhirl(ctx, w);
+
   if (w.bannerT > 0 && (w.mode === "play" || w.mode === "pause")) {
     ctx.globalAlpha = Math.min(1, w.bannerT * 1.8);
-    ctx.fillStyle = STEEL;
-    ctx.font = `600 ${WORLD_W < 560 ? 18 : 28}px Barlow Condensed, sans-serif`;
     ctx.textAlign = "center";
-    ctx.fillText(w.banner, WORLD_W / 2, WORLD_W < 560 ? 78 : 92);
+    // a long banner on a narrow screen shrinks to fit instead of running off both edges
+    let size = w.duel ? (WORLD_W < 560 ? 26 : 44) : WORLD_W < 560 ? 18 : 28;
+    ctx.font = `600 ${size}px Barlow Condensed, sans-serif`;
+    const wide = ctx.measureText(w.banner).width;
+    if (wide > WORLD_W * 0.94) {
+      size = Math.max(11, Math.floor((size * WORLD_W * 0.94) / wide));
+      ctx.font = `600 ${size}px Barlow Condensed, sans-serif`;
+    }
+    const by = w.duel ? WORLD_H / 2 + size * 0.35 : WORLD_W < 560 ? 78 : 92;
+    ctx.lineWidth = 4;
+    ctx.strokeStyle = "rgba(8,10,14,0.8)";
+    ctx.strokeText(w.banner, WORLD_W / 2, by);
+    ctx.fillStyle = STEEL;
+    ctx.fillText(w.banner, WORLD_W / 2, by);
     ctx.globalAlpha = 1;
   }
 
@@ -231,7 +267,218 @@ export function drawWorld(ctx: CanvasRenderingContext2D, w: World, focus: boolea
 
   ctx.restore();
 
-  if (w.mode === "play" || w.mode === "pause" || w.mode === "bridge" || w.mode === "clear" || w.mode === "over" || w.mode === "victory") drawHud(ctx, w);
+  if (w.duel) {
+    if (w.mode === "play" || w.mode === "pause" || w.mode === "duelover") drawDuelHud(ctx, w);
+  } else if (w.mode === "play" || w.mode === "pause" || w.mode === "bridge" || w.mode === "clear" || w.mode === "over" || w.mode === "victory") drawHud(ctx, w);
+}
+
+/** A pseudo-random number in 0..1 that is always the same for the same pair. */
+function hash(n: number, seed: number) {
+  const x = Math.sin(n * 127.1 + seed * 311.7) * 43758.5453;
+  return x - Math.floor(x);
+}
+
+/** The mess where something died: it spreads fast, sits a moment and fades. */
+function drawSplat(ctx: CanvasRenderingContext2D, sp: Splat) {
+  const u = 1 - sp.life / sp.max;
+  const grow = 1 - Math.pow(1 - Math.min(1, u / 0.16), 3);
+  const alpha = u < 0.45 ? 0.82 : 0.82 * (1 - (u - 0.45) / 0.55);
+  const r = sp.r * (0.3 + 0.7 * grow);
+  ctx.save();
+  ctx.translate(sp.x, sp.y);
+  ctx.globalAlpha = Math.max(0, alpha);
+  const blob = () => {
+    ctx.beginPath();
+    ctx.arc(0, 0, r * 0.56, 0, Math.PI * 2);
+    for (let i = 0; i < 7; i++) {
+      const a = (i / 7) * Math.PI * 2 + hash(i, sp.seed) * 0.8;
+      const dist = r * (0.42 + hash(i + 9, sp.seed) * 0.5);
+      const rr = r * (0.15 + hash(i + 17, sp.seed) * 0.2);
+      ctx.moveTo(Math.cos(a) * dist + rr, Math.sin(a) * dist);
+      ctx.arc(Math.cos(a) * dist, Math.sin(a) * dist, rr, 0, Math.PI * 2);
+    }
+    // drops that keep flying after the splash has landed
+    for (let i = 0; i < 5; i++) {
+      const a = hash(i + 31, sp.seed) * Math.PI * 2;
+      const dist = r * (0.9 + u * 1.5 * (0.5 + hash(i + 41, sp.seed)));
+      const rr = Math.max(1.2, r * 0.07 * (1 - u * 0.5));
+      ctx.moveTo(Math.cos(a) * dist + rr, Math.sin(a) * dist);
+      ctx.arc(Math.cos(a) * dist, Math.sin(a) * dist, rr, 0, Math.PI * 2);
+    }
+  };
+  blob();
+  ctx.strokeStyle = "rgba(20,12,8,0.7)";
+  ctx.lineWidth = 3;
+  ctx.stroke();
+  ctx.fillStyle = sp.color;
+  ctx.fill();
+  ctx.fillStyle = "rgba(255,240,210,0.22)";
+  ctx.beginPath();
+  ctx.ellipse(-r * 0.18, -r * 0.2, r * 0.2, r * 0.11, -0.5, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+}
+
+/** The critter that has just died: its own picture, swelling and going white. */
+function drawPop(ctx: CanvasRenderingContext2D, p: Pop) {
+  if (p.role === "storm" || p.role === "stormbig") return;
+  const u = Math.max(0, p.life / p.max);
+  const path = p.kind === "boss" ? `b/${bossArt(p.ch, p.hurt)}` : `e/${lookId(p.look)}`;
+  const img = art(path);
+  if (!img) return;
+  const base = p.kind === "boss" ? 150 : (p.kind === "cruiser" ? 58 : p.kind === "wedge" ? 38 : p.kind === "drone" ? 37 : 32) * (p.role === "mini" ? 1.75 : 1);
+  ctx.save();
+  ctx.translate(p.x, p.y);
+  ctx.rotate((1 - u) * (hash(1, p.spin) - 0.5) * 0.9);
+  ctx.globalAlpha = u;
+  blitMass(ctx, path, img, base * p.size * (1 + (1 - u) * 0.5), 0.05 + (1 - u) * 0.1);
+  ctx.restore();
+}
+
+/** The Super Flush: the whole screen goes round and down. */
+function drawWhirl(ctx: CanvasRenderingContext2D, w: World) {
+  const u = Math.min(1, w.superT / 1.5);
+  const cx = WORLD_W / 2;
+  const cy = WORLD_H / 2;
+  const reach = Math.hypot(WORLD_W, WORLD_H) / 2;
+  ctx.save();
+  ctx.fillStyle = `rgba(63,127,224,${0.22 * u})`;
+  ctx.fillRect(-20, -20, WORLD_W + 40, WORLD_H + 40);
+  ctx.translate(cx, cy);
+  ctx.lineCap = "round";
+  for (let i = 0; i < 9; i++) {
+    const turn = w.time * 7 + (i / 9) * Math.PI * 2;
+    ctx.strokeStyle = i % 2 ? `rgba(244,251,255,${0.5 * u})` : `rgba(126,182,214,${0.6 * u})`;
+    ctx.lineWidth = i % 2 ? 4 : 9;
+    ctx.beginPath();
+    for (let k = 0; k <= 26; k++) {
+      const t = k / 26;
+      const rad = reach * (0.04 + t * (0.25 + 0.75 * u));
+      const a = turn + t * 4.2;
+      const x = Math.cos(a) * rad;
+      const y = Math.sin(a) * rad * 0.8;
+      if (k === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+/** The name card of a boss or a mini-boss that has just flown in. */
+function drawIntro(ctx: CanvasRenderingContext2D, w: World) {
+  const it = w.intro;
+  if (!it) return;
+  const narrow = WORLD_W < 560;
+  const inn = Math.min(1, (it.max - it.t) / 0.22);
+  const out = Math.min(1, it.t / 0.3);
+  const a = Math.min(inn, out);
+  const ease = 1 - Math.pow(1 - inn, 3);
+  const cy = WORLD_H * 0.52;
+  const bandH = (narrow ? 112 : 150) * (0.6 + 0.4 * ease);
+  ctx.save();
+  ctx.globalAlpha = a * 0.84;
+  ctx.fillStyle = "#07090c";
+  ctx.fillRect(0, cy - bandH / 2, WORLD_W, bandH);
+  ctx.globalAlpha = a;
+  ctx.fillStyle = EMBER;
+  ctx.fillRect(0, cy - bandH / 2, WORLD_W * ease, 3);
+  ctx.fillRect(WORLD_W * (1 - ease), cy + bandH / 2 - 3, WORLD_W * ease, 3);
+  const slide = (1 - ease) * -70;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillStyle = EMBER;
+  ctx.font = `600 ${narrow ? 12 : 15}px Barlow Condensed, sans-serif`;
+  ctx.fillText(it.tag.split("").join("\u200a"), WORLD_W / 2 + slide, cy - (narrow ? 34 : 46));
+  let size = narrow ? 34 : 60;
+  ctx.font = `700 ${size}px Barlow Condensed, sans-serif`;
+  const wide = ctx.measureText(it.title).width;
+  if (wide > WORLD_W * 0.9) {
+    size = Math.floor((size * WORLD_W * 0.9) / wide);
+    ctx.font = `700 ${size}px Barlow Condensed, sans-serif`;
+  }
+  ctx.fillStyle = "#f4f1ea";
+  ctx.fillText(it.title, WORLD_W / 2 - slide, cy - (narrow ? 4 : 4));
+  if (it.sub) {
+    let sub = narrow ? 13 : 19;
+    ctx.font = `italic 500 ${sub}px Barlow, sans-serif`;
+    const sw = ctx.measureText(it.sub).width;
+    if (sw > WORLD_W * 0.92) {
+      sub = Math.max(9, Math.floor((sub * WORLD_W * 0.92) / sw));
+      ctx.font = `italic 500 ${sub}px Barlow, sans-serif`;
+    }
+    ctx.fillStyle = COLD;
+    ctx.fillText(it.sub, WORLD_W / 2 + slide * 0.5, cy + (narrow ? 30 : 42));
+  }
+  ctx.restore();
+}
+
+/** A duel: each pilot keeps to a half, and the gifts ride the line between them. */
+function drawDuelField(ctx: CanvasRenderingContext2D, w: World) {
+  ctx.save();
+  ctx.fillStyle = "rgba(53,208,192,0.05)";
+  ctx.fillRect(0, 0, WORLD_W, WORLD_H / 2);
+  ctx.fillStyle = "rgba(255,107,74,0.05)";
+  ctx.fillRect(0, WORLD_H / 2, WORLD_W, WORLD_H / 2);
+  ctx.strokeStyle = "rgba(244,241,234,0.28)";
+  ctx.lineWidth = 2;
+  ctx.setLineDash([14, 12]);
+  ctx.lineDashOffset = -w.time * 18;
+  ctx.beginPath();
+  ctx.moveTo(0, WORLD_H / 2);
+  ctx.lineTo(WORLD_W, WORLD_H / 2);
+  ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.restore();
+}
+
+function drawDuelHud(ctx: CanvasRenderingContext2D, w: World) {
+  const d = w.duel;
+  if (!d) return;
+  const width = Math.min(260, WORLD_W * 0.42);
+  ctx.save();
+  ctx.textBaseline = "alphabetic";
+  for (const i of [0, 1]) {
+    const y = i === 0 ? WORLD_H - 30 : 20;
+    const x = 16;
+    const ratio = Math.max(0, d.hp[i] / DUEL_HP);
+    ctx.fillStyle = "rgba(8,10,14,0.8)";
+    ctx.fillRect(x - 2, y - 2, width + 4, 14);
+    ctx.fillStyle = "#1c2128";
+    ctx.fillRect(x, y, width, 10);
+    ctx.fillStyle = TEAM[i];
+    ctx.fillRect(x, y, width * ratio, 10);
+    ctx.fillStyle = "rgba(255,255,255,0.3)";
+    ctx.fillRect(x, y, width * ratio, 3);
+    ctx.font = "600 14px Barlow Condensed, sans-serif";
+    ctx.textAlign = "left";
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = "rgba(8,10,14,0.85)";
+    const label = `PILOT ${i + 1}`;
+    const ly = i === 0 ? y - 8 : y + 28;
+    ctx.strokeText(label, x, ly);
+    ctx.fillStyle = TEAM[i];
+    ctx.fillText(label, x, ly);
+    // rounds won: three lights each
+    for (let k = 0; k < DUEL_WINS; k++) {
+      const cx = x + 70 + k * 16;
+      ctx.beginPath();
+      ctx.arc(cx, ly - 5, 5, 0, Math.PI * 2);
+      ctx.fillStyle = k < d.wins[i] ? "#f2d24a" : "rgba(8,10,14,0.8)";
+      ctx.fill();
+      ctx.strokeStyle = "#f2d24a";
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+    }
+    const p = i === 0 ? w.player : w.wing;
+    if (p) {
+      ctx.textAlign = "left";
+      ctx.font = "600 13px Barlow Condensed, sans-serif";
+      ctx.fillStyle = STEEL_DIM;
+      ctx.fillText(gunName(p.weapon, p.family), x + 70 + DUEL_WINS * 16 + 8, ly);
+    }
+  }
+  ctx.restore();
 }
 
 let hangarImg: HTMLImageElement | null = null;
@@ -436,8 +683,20 @@ function drawHud(ctx: CanvasRenderingContext2D, w: World) {
     ctx.fillRect(42, 68, 3, 12);
     for (let i = 0; i < w.wing.lives; i++) drawLifeIcon(ctx, w.meta.skin2, 54 + i * 16, 90, skin2);
   }
-  const boss = w.enemies.find((e) => e.kind === "boss" && e.hp > 0);
+  const boss = w.enemies.find((e) => (e.kind === "boss" || e.role === "mini") && e.hp > 0);
   if (boss) drawBossBar(ctx, boss);
+  else if (w.mode === "play" || w.mode === "pause") {
+    const narrow = WORLD_W < 560;
+    const y = narrow ? 116 : 34;
+    if (w.kind === "storm" && w.stormEnd > 0) {
+      const left = Math.max(0, w.stormEnd - w.spawnClock);
+      if (left > 0) topBar(ctx, `POOP STORM · ${Math.ceil(left)}`, 1 - left / w.stormEnd, y, "#8a5a2c");
+    } else if (w.kind === "pipes") {
+      const left = w.hazards.reduce((n, h) => n + (h.kind === "pipe" ? 1 : 0), 0);
+      if (left > 0 && w.born > 0) topBar(ctx, `PIPE RUN · ${left} TO GO`, 1 - left / w.born, y, "#6f9a84");
+    }
+  }
+  if (w.wing && !w.arcade) drawTeam(ctx, w);
   const toast = w.toasts[0];
   if (toast) {
     // an achievement: a small plaque that drops in under the top edge and leaves again
@@ -508,6 +767,71 @@ function drawHud(ctx: CanvasRenderingContext2D, w: World) {
     ctx.textAlign = "left";
     ctx.fillText(`EN ${w.enemies.length} B ${w.bullets.length} SN ${Math.floor(w.snacks)}`, 16, WORLD_H - 48);
   }
+}
+
+/** A thin progress bar with a label, where the boss bar goes. */
+function topBar(ctx: CanvasRenderingContext2D, label: string, ratio: number, y: number, color: string) {
+  const narrow = WORLD_W < 560;
+  const width = Math.min(420, WORLD_W * (narrow ? 0.62 : 0.4));
+  const x = (WORLD_W - width) / 2;
+  ctx.save();
+  ctx.font = `600 ${narrow ? 12 : 14}px Barlow Condensed, sans-serif`;
+  ctx.textAlign = "center";
+  ctx.lineWidth = 3;
+  ctx.strokeStyle = "rgba(8,10,14,0.85)";
+  ctx.strokeText(label, WORLD_W / 2, y - 7);
+  ctx.fillStyle = STEEL;
+  ctx.fillText(label, WORLD_W / 2, y - 7);
+  ctx.fillStyle = "rgba(8,10,14,0.8)";
+  ctx.fillRect(x - 2, y - 2, width + 4, 9);
+  ctx.fillStyle = "#1c2128";
+  ctx.fillRect(x, y, width, 5);
+  ctx.fillStyle = color;
+  ctx.fillRect(x, y, width * Math.max(0, Math.min(1, ratio)), 5);
+  ctx.restore();
+}
+
+/** Two pilots: each one's Super Flush charge, and the call to fire it when both are full. */
+function drawTeam(ctx: CanvasRenderingContext2D, w: World) {
+  const x = 16;
+  const width = 84;
+  const ready = w.team[0] >= 100 && w.team[1] >= 100;
+  ctx.save();
+  ctx.font = "600 11px Barlow Condensed, sans-serif";
+  ctx.textAlign = "left";
+  ctx.fillStyle = STEEL_DIM;
+  ctx.fillText("SUPER FLUSH", x, WORLD_H - 46);
+  for (const i of [0, 1]) {
+    const y = WORLD_H - 40 + i * 8;
+    const full = w.team[i] >= 100;
+    ctx.fillStyle = "#1a2128";
+    ctx.fillRect(x, y, width, 5);
+    ctx.fillStyle = TEAM[i];
+    ctx.globalAlpha = full ? 0.75 + 0.25 * Math.sin(w.time * 9) : 0.9;
+    ctx.fillRect(x, y, (width * Math.min(100, w.team[i])) / 100, 5);
+    ctx.globalAlpha = 1;
+  }
+  if (ready && (w.mode === "play" || w.mode === "pause")) {
+    const pulse = 0.65 + 0.35 * Math.sin(w.time * 8);
+    ctx.lineWidth = 4;
+    ctx.strokeStyle = "rgba(8,10,14,0.85)";
+    ctx.globalAlpha = pulse;
+    ctx.fillStyle = "#9fd8ff";
+    if (w.superWait) {
+      // one pilot has called it: shout at the other, in the middle of the screen
+      ctx.font = `700 ${WORLD_W < 700 ? 20 : 30}px Barlow Condensed, sans-serif`;
+      ctx.textAlign = "center";
+      ctx.strokeText("PARTNER – PRESS BOMB NOW!", WORLD_W / 2, WORLD_H * 0.44);
+      ctx.fillText("PARTNER – PRESS BOMB NOW!", WORLD_W / 2, WORLD_H * 0.44);
+    } else {
+      // charged and waiting: a quiet reminder beside the two bars, out of the way of the ships
+      ctx.font = "700 14px Barlow Condensed, sans-serif";
+      ctx.textAlign = "left";
+      ctx.strokeText("READY · BOTH PRESS BOMB", x + width + 10, WORLD_H - 30);
+      ctx.fillText("READY · BOTH PRESS BOMB", x + width + 10, WORLD_H - 30);
+    }
+  }
+  ctx.restore();
 }
 
 /** Two pilots flying wing to wing: a live wire between the ships while the damage bonus holds. */
@@ -590,7 +914,8 @@ function drawBossBar(ctx: CanvasRenderingContext2D, boss: Enemy) {
   const y = narrow ? 116 : 34;
   const pal = CHAPTERS[boss.ch] ?? CHAPTERS[0];
   const ratio = Math.max(0, boss.hp / boss.max);
-  const name = BOSS_LINES[boss.ch]?.[0] ?? "BOSS";
+  const mini = boss.kind !== "boss";
+  const name = mini ? `BIG ${lookName(boss.look).toUpperCase()}` : (BOSS_LINES[boss.ch]?.[0] ?? "BOSS");
   ctx.save();
   ctx.font = `600 ${narrow ? 12 : 14}px Barlow Condensed, sans-serif`;
   ctx.textAlign = "center";
@@ -608,7 +933,7 @@ function drawBossBar(ctx: CanvasRenderingContext2D, boss: Enemy) {
   ctx.fillStyle = "rgba(255,255,255,0.35)";
   ctx.fillRect(x, y, width * ratio, 2);
   ctx.fillStyle = "rgba(8,10,14,0.95)";
-  for (const mark of bossPhases(boss.ch) === 4 ? [0.7, 0.4, 0.15] : [0.66, 0.33]) ctx.fillRect(x + width * mark - 1, y - 2, 2, 11);
+  for (const mark of mini ? [0.5] : bossPhases(boss.ch) === 4 ? [0.7, 0.4, 0.15] : [0.66, 0.33]) ctx.fillRect(x + width * mark - 1, y - 2, 2, 11);
   ctx.restore();
 }
 
@@ -639,10 +964,20 @@ function flame(ctx: CanvasRenderingContext2D, x: number, y: number, len: number)
 function drawPlayer(ctx: CanvasRenderingContext2D, w: World, p: Player, focus: boolean, skin: SkinDef, spriteId: string) {
   // hurt and briefly safe: the ship blinks. Under a Star it glows instead.
   const blink = p.inv > 0 && p.star <= 0 && Math.sin(w.time * 38) > 0;
+  const flip = !!w.duel && p === w.wing;
   if (!blink) {
     ctx.save();
-    ctx.translate(p.x, p.y + p.muzzle * 36);
+    ctx.translate(p.x, p.y + (flip ? -1 : 1) * p.muzzle * 36);
     ctx.rotate(p.bank);
+    if (flip) ctx.rotate(Math.PI);
+    if (w.wing && !w.duel && !w.arcade && w.team[p === w.wing ? 1 : 0] >= 100) {
+      // charged for the Super Flush
+      ctx.strokeStyle = `rgba(159,216,255,${0.45 + 0.3 * Math.sin(w.time * 9)})`;
+      ctx.lineWidth = 2.5;
+      ctx.beginPath();
+      ctx.arc(0, 0, 37 + Math.sin(w.time * 6) * 2, 0, Math.PI * 2);
+      ctx.stroke();
+    }
     const feed = p.feed > 0;
     const flick = 0.45 + (Math.sin(w.time * 46) * 0.5 + 0.5) * 0.7;
     ctx.fillStyle = feed ? `rgba(224,122,61,${0.4 + flick * 0.45})` : `rgba(126,182,214,${0.28 + flick * 0.5})`;
@@ -896,10 +1231,29 @@ function drawEnemy(ctx: CanvasRenderingContext2D, e: Enemy, time: number, px: nu
       ctx.lineTo(Math.cos(a) * 42, Math.sin(a) * 42);
       ctx.stroke();
     }
+  } else if (e.role === "storm" || e.role === "stormbig") {
+    // storm poop: the same drawings as the shots, big enough to shoot at
+    const big = e.role === "stormbig";
+    const hit = Math.min(1, e.flash * 6);
+    const sc = (big ? 3 : 1.75) * k * (1 + hit * 0.14);
+    ctx.save();
+    if (big) ctx.rotate(Math.sin(time * 1.7 + e.spin) * 0.22);
+    ctx.scale(sc, sc);
+    if (hit > 0) ctx.filter = "brightness(1.7)";
+    if (!drawHostileShot(ctx, big ? 3 : 0, e.x, e.y, 0, 1, time, false, Math.abs(Math.floor(e.spin * 13 + e.ox)))) {
+      ctx.fillStyle = "#6a4424";
+      ctx.beginPath();
+      ctx.arc(0, 0, 11, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.restore();
   } else {
     const facePath = `e/${lookId(e.look)}`;
     const face = art(facePath);
-    const h = (e.kind === "cruiser" ? 58 : e.kind === "wedge" ? 38 : e.kind === "drone" ? 37 : 32) * k;
+    const mini = e.role === "mini";
+    const h = (e.kind === "cruiser" ? 58 : e.kind === "wedge" ? 38 : e.kind === "drone" ? 37 : 32) * k * (mini ? 1.75 : 1);
+    // an angry mini-boss cannot keep still
+    if (mini && e.mark >= 1) ctx.translate(Math.sin(time * 43) * 1.6, Math.cos(time * 37) * 1.1);
     if (e.role === "honey") {
       // Honey Turret: everything inside the amber ring is immune until it dies
       const ringR = HONEY_RING * k;
@@ -962,7 +1316,7 @@ function drawEnemy(ctx: CanvasRenderingContext2D, e: Enemy, time: number, px: nu
       ctx.arc(0, bob, h * 0.66, Math.PI * 0.15, Math.PI * 0.85);
       ctx.stroke();
     }
-    if (e.kind === "cruiser") bar(ctx, 30, h * 0.5, e.hp / e.max, pal.accent);
+    if (e.kind === "cruiser" && !mini) bar(ctx, 30, h * 0.5, e.hp / e.max, pal.accent);
   }
   ctx.restore();
 }
@@ -1009,12 +1363,25 @@ function blitLong(ctx: CanvasRenderingContext2D, img: HTMLImageElement, size: nu
   ctx.drawImage(img, -w / 2, -h / 2, w, h);
 }
 
-/** One of the pilots' own shots. */
-function drawShot(ctx: CanvasRenderingContext2D, b: Bullet, time: number) {
+/** One of the pilots' own shots. In a duel each shot glows in its pilot's colour, so nobody dodges their own. */
+function drawShot(ctx: CanvasRenderingContext2D, b: Bullet, time: number, team?: string) {
   const style = b.style ?? STYLE.bubble;
   const rank = Math.max(0, Math.min(2, b.rank ?? 0));
   ctx.save();
   ctx.translate(b.x, b.y);
+  if (team) {
+    const halo = b.r * 2 + 8;
+    ctx.globalAlpha = 0.4;
+    ctx.fillStyle = team;
+    ctx.beginPath();
+    ctx.arc(0, 0, halo, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.globalAlpha = 0.95;
+    ctx.strokeStyle = team;
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+  }
   const heading = Math.atan2(b.vy, b.vx) + Math.PI / 2;
   const family = SHOT_ART[style];
   if (family) {
@@ -1524,9 +1891,107 @@ function drawPickup(ctx: CanvasRenderingContext2D, kind: string, x: number, y: n
   ctx.restore();
 }
 
-function drawHazard(ctx: CanvasRenderingContext2D, h: { kind: string; x: number; y: number; w: number; h: number; t: number; phase: number }, time: number) {
+/** One sewer pipe across the screen, with its gaps, the brass collars at the gaps and the valve. */
+function drawPipe(ctx: CanvasRenderingContext2D, h: VHazard, time: number, level: number) {
+  const half = h.h / 2;
+  const top = h.y - half;
+  const pal = CHAPTERS[chapterIndex(level)] ?? CHAPTERS[0];
+  const gaps = [h.x, ...(h.x2 !== undefined ? [h.x2] : [])].sort((a, b) => a - b);
+  // the solid stretches between the gaps
+  const runs: [number, number][] = [];
+  let from = -20;
+  for (const g of gaps) {
+    runs.push([from, g - h.w / 2]);
+    from = g + h.w / 2;
+  }
+  runs.push([from, WORLD_W + 20]);
+  const body = ctx.createLinearGradient(0, top, 0, top + h.h);
+  body.addColorStop(0, "#2f4138");
+  body.addColorStop(0.28, "#8fb39c");
+  body.addColorStop(0.5, "#5f8571");
+  body.addColorStop(1, "#22302a");
+  ctx.lineJoin = "round";
+  for (const [a, b] of runs) {
+    if (b - a < 4) continue;
+    ctx.fillStyle = body;
+    ctx.strokeStyle = "#120f0d";
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.rect(a, top, b - a, h.h);
+    ctx.fill();
+    ctx.stroke();
+    // bands and a stain or two, fixed to the pipe
+    ctx.fillStyle = "rgba(18,15,13,0.45)";
+    for (let x = Math.ceil((a + 30) / 96) * 96; x < b - 24; x += 96) ctx.fillRect(x, top + 1.5, 5, h.h - 3);
+    ctx.fillStyle = "rgba(106,68,36,0.7)";
+    for (let x = Math.ceil((a + 60) / 170) * 170; x < b - 30; x += 170) {
+      ctx.beginPath();
+      ctx.ellipse(x, top + h.h, 9, 4 + hash(x, h.w) * 5, 0, 0, Math.PI);
+      ctx.fill();
+    }
+  }
+  // brass collars where the pipe is cut, lit in the room's colour when the gap slides
+  for (const g of gaps) {
+    for (const side of [-1, 1]) {
+      const cx = g + side * (h.w / 2);
+      ctx.fillStyle = "#c9a24a";
+      ctx.strokeStyle = "#120f0d";
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.rect(cx - (side < 0 ? 12 : 0), top - 6, 12, h.h + 12);
+      ctx.fill();
+      ctx.stroke();
+      ctx.fillStyle = "rgba(255,244,200,0.55)";
+      ctx.fillRect(cx - (side < 0 ? 10 : -2), top - 3, 8, 3);
+      if (h.vx !== 0) {
+        ctx.fillStyle = pal.accent;
+        ctx.globalAlpha = 0.6 + 0.4 * Math.sin(time * 10);
+        ctx.fillRect(cx - (side < 0 ? 12 : 0), top + half - 2, 12, 4);
+        ctx.globalAlpha = 1;
+      }
+    }
+  }
+  if (h.hp > 0) {
+    // the valve: a red wheel that shudders when it is hit and shows how much is left
+    const hit = h.t > 0;
+    ctx.save();
+    ctx.translate(h.phase + (hit ? Math.sin(time * 90) * 1.5 : 0), h.y);
+    ctx.fillStyle = "#120f0d";
+    ctx.beginPath();
+    ctx.arc(0, 0, 23, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.rotate(time * 1.4 + (1 - h.hp / (h.max || h.hp)) * 5);
+    ctx.strokeStyle = hit ? "#ffffff" : "#e0433a";
+    ctx.lineWidth = 5;
+    ctx.beginPath();
+    ctx.arc(0, 0, 16, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.lineWidth = 3.5;
+    for (let i = 0; i < 3; i++) {
+      const a = (i / 3) * Math.PI;
+      ctx.beginPath();
+      ctx.moveTo(Math.cos(a) * 16, Math.sin(a) * 16);
+      ctx.lineTo(-Math.cos(a) * 16, -Math.sin(a) * 16);
+      ctx.stroke();
+    }
+    ctx.fillStyle = hit ? "#ffffff" : "#f2d24a";
+    ctx.beginPath();
+    ctx.arc(0, 0, 4.5, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+    ctx.strokeStyle = "rgba(244,251,255,0.85)";
+    ctx.lineWidth = 2.5;
+    ctx.beginPath();
+    ctx.arc(h.phase, h.y, 27, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * Math.max(0, h.hp / (h.max || h.hp)));
+    ctx.stroke();
+  }
+}
+
+function drawHazard(ctx: CanvasRenderingContext2D, h: VHazard, time: number, level = 1) {
   ctx.save();
-  if (h.kind === "pane") {
+  if (h.kind === "pipe") {
+    drawPipe(ctx, h, time, level);
+  } else if (h.kind === "pane") {
     ctx.globalAlpha = 0.35;
     ctx.fillStyle = "#cfe7f2";
     ctx.fillRect(h.x - h.w / 2, h.y - h.h / 2, h.w, h.h);

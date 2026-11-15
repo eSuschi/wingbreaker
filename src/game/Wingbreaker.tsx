@@ -3,7 +3,7 @@ import { DollarSign } from "lucide-react";
 import { Sfx } from "./audio";
 import { Music } from "./music";
 import { chapterOf, CHAPTERS, DIFFICULTY, FEATS, GUN_PRICE, quipFor, SKINS, UPGRADE_LIST, starTotal, type SkinId, type UpgradeId } from "./meta";
-import { CREDITS, FAMILIES, GUIDE, TIPS, daySeed, familyBlurb, familyName, type GunFamily } from "./v3";
+import { CREDITS, FAMILIES, GUIDE, LOSER_TITLES, TIPS, WINNER_TITLES, daySeed, familyBlurb, familyName, type GunFamily } from "./v3";
 
 const GIFT_ART: Record<GunFamily, string> = {
   bubble: "bubble_blaster",
@@ -39,6 +39,7 @@ import {
   setShake,
   skipBridge,
   startArcade,
+  startDuel,
   setMusic,
   setSfx,
   setCrew,
@@ -106,6 +107,8 @@ type Ui = {
   born: number;
   arcade: boolean;
   replay: boolean;
+  series: [number, number];
+  duel: { wins: [number, number]; taunt: string } | null;
 };
 
 function readUi(world: World, muted: boolean): Ui {
@@ -158,7 +161,19 @@ function readUi(world: World, muted: boolean): Ui {
     born: world.born,
     arcade: world.arcade,
     replay: world.pinned != null && !world.arcade,
+    series: [world.series[0], world.series[1]],
+    duel: world.duel ? { wins: [world.duel.wins[0], world.duel.wins[1]], taunt: world.duel.taunt } : null,
   };
+}
+
+/** The end-of-level card for two pilots: who shot more, and what the other one gets called. */
+function versus(tally: [number, number], level: number) {
+  const [a, b] = tally;
+  const pick = Math.abs(level * 7 + a * 3 + b);
+  if (a === b) return { lead: -1, titles: ["DEAD EVEN", "SHARE THE SOAP"] as [string, string] };
+  const win = WINNER_TITLES[pick % WINNER_TITLES.length] ?? "TOP PLUNGER";
+  const lose = LOSER_TITLES[pick % LOSER_TITLES.length] ?? "MORAL SUPPORT";
+  return { lead: a > b ? 0 : 1, titles: (a > b ? [win, lose] : [lose, win]) as [string, string] };
 }
 
 /** One line for the end-of-level bar when two pilots fly: who shot more, and a nudge for the other. */
@@ -247,6 +262,8 @@ export function Wingbreaker() {
     born: 0,
     arcade: false,
     replay: false,
+    series: [0, 0],
+    duel: null,
   });
   const [touch, setTouch] = useState(false);
   // which pilot the hangar is choosing a ship for
@@ -495,6 +512,7 @@ export function Wingbreaker() {
       else if (world.mode === "over") retryLevel(world);
       else if (world.mode === "pause") world.mode = "play";
       else if (world.mode === "victory") world.mode = "menu";
+      else if (world.mode === "duelover") startDuel(world);
       else return;
       sfx.drone(world.mode === "play");
       sync();
@@ -585,6 +603,11 @@ export function Wingbreaker() {
       }
       if (e.code === "Escape" && world.mode === "menu") {
         setPick(false);
+        sync();
+        return;
+      }
+      if (e.code === "Escape" && world.mode === "duelover") {
+        openMode(world, "menu");
         sync();
         return;
       }
@@ -709,10 +732,21 @@ export function Wingbreaker() {
       }
       let killed = false;
       let big = false;
+      let wet = false;
+      let rude = false;
       plinkN = 0;
       for (const cue of world.cues) {
         if (cue === "kill") killed = true;
         else if (cue === "big") big = true;
+        else if (cue === "splat") wet = true;
+        else if (cue === "fart") rude = true;
+        else if (cue === "flush") {
+          sfx.flush();
+          music.duck();
+        }
+        else if (cue === "valve") sfx.valve();
+        else if (cue === "ready") sfx.ready();
+        else if (cue === "card") sfx.card();
         else if (cue === "hit") sfx.armor();
         else if (cue === "graze") sfx.graze();
         else if (cue === "pickup") sfx.pickup();
@@ -734,6 +768,8 @@ export function Wingbreaker() {
       }
       world.cues.length = 0;
       if (big) sfx.kill(true);
+      else if (rude) sfx.fart();
+      else if (wet) sfx.splat();
       else if (killed) sfx.kill(false);
 
       const dpr = layout.dpr || Math.min(window.devicePixelRatio || 1, 2);
@@ -761,7 +797,7 @@ export function Wingbreaker() {
 
       hudAcc += delta;
       if (world.mode !== lastMode || hudAcc > 0.15) {
-        if (world.mode === "pause" && lastMode === "play") {
+        if (world.mode === "pause" && lastMode === "play" && !world.duel) {
           saveNow(world);
           setNotice("SAVED");
           window.setTimeout(() => setNotice(""), 1000);
@@ -895,9 +931,20 @@ export function Wingbreaker() {
                 </div>
                 <p className="mt-1.5 text-xs leading-relaxed text-muted">
                   {ui.crew === "coop"
-                    ? "Pilot: WASD, Z fires, Space bombs. Wingman: arrows, K fires, L bombs. Or plug in gamepads. Revive a downed partner by flying over the wreck."
+                    ? "Pilot: WASD, Z fires, Space bombs. Wingman: arrows, K fires, L bombs. Or plug in gamepads. Revive a downed partner by flying over the wreck. Fill both Super Flush bars, then both press bomb."
                     : "WASD move · Z or click shoot · C second weapon · Space bomb · Shift slow · P pause. A gamepad works too."}
                 </p>
+                <button
+                  type="button"
+                  className="mt-2 flex h-14 w-full items-center justify-between border border-line bg-bg/70 px-4 text-left backdrop-blur-sm hover:border-ember"
+                  onClick={() => act((w) => startDuel(w))}
+                >
+                  <span className="font-display text-lg tracking-[0.14em] text-ink">DUEL</span>
+                  <span className="text-right text-xs leading-tight text-muted">
+                    <span className="block">Pilot against pilot, first to 3 rounds</span>
+                    <span className="block">Bottom: WASD + Z · Top: arrows + K</span>
+                  </span>
+                </button>
               </div>
             )}
 
@@ -1205,7 +1252,9 @@ export function Wingbreaker() {
         <div className="absolute inset-0 z-20 flex items-center justify-center bg-bg/55">
           <div className="flex w-[min(92vw,320px)] flex-col gap-2 px-5">
             <p className="text-center font-display text-4xl tracking-[0.2em]">PAUSED</p>
-            <p className="text-center font-display text-2xl text-muted">{String(ui.score).padStart(6, "0")}</p>
+            <p className="text-center font-display text-2xl text-muted">
+              {ui.duel ? `DUEL · ${ui.duel.wins[0]} : ${ui.duel.wins[1]}` : String(ui.score).padStart(6, "0")}
+            </p>
             <button type="button" className={row} onClick={() => act((w) => openMode(w, "play"))}>
               <span>RESUME</span>
             </button>
@@ -1274,7 +1323,30 @@ export function Wingbreaker() {
               <dt className="text-muted">No bombs used</dt>
               <dd className={`text-right font-display text-lg leading-none ${ui.noBomb ? "text-cold" : "text-muted"}`}>{ui.noBomb ? "YES" : "NO"}</dd>
             </dl>
-            {ui.coop && <p className="font-display text-sm tracking-[0.12em] text-cold">{crewLine(ui.tally)}</p>}
+            {ui.coop &&
+              (() => {
+                const v = versus(ui.tally, ui.level);
+                return (
+                  <div className="mt-1 border border-line bg-bg/60 px-3 py-2">
+                    <div className="grid grid-cols-2 gap-3">
+                      {[0, 1].map((i) => (
+                        <div key={i} className={i === 1 ? "text-right" : ""}>
+                          <p className="font-display text-xs tracking-[0.2em]" style={{ color: i === 0 ? "#ff6b4a" : "#35d0c0" }}>
+                            PILOT {i + 1}
+                          </p>
+                          <p className="font-display text-4xl leading-none">{ui.tally[i]}</p>
+                          <p className={`mt-1 font-display text-sm leading-tight tracking-[0.08em] ${v.lead === i ? "text-ember" : "italic text-muted"}`}>
+                            {v.titles[i]}
+                          </p>
+                        </div>
+                      ))}
+                    </div>
+                    <p className="mt-2 text-center font-display text-xs tracking-[0.2em] text-muted">
+                      LEVELS WON · {ui.series[0]} : {ui.series[1]}
+                    </p>
+                  </div>
+                );
+              })()}
             <p className="text-sm italic text-cold">{ui.quip}</p>
             <button
               type="button"
@@ -1302,6 +1374,35 @@ export function Wingbreaker() {
                 </>
               )}
             </div>
+          </div>
+        </div>
+      )}
+
+      {ui.mode === "duelover" && ui.duel && (
+        <div className="absolute inset-0 z-20 flex items-center justify-center bg-bg/65 backdrop-blur-[2px]">
+          <div className="menu-rise flex w-[min(92vw,400px)] flex-col gap-2 border border-line bg-bg/85 px-5 py-5 text-center">
+            <p className="font-display text-xs tracking-[0.32em] text-muted">DUEL</p>
+            <h2
+              className="font-display text-5xl leading-none font-semibold tracking-wide"
+              style={{ color: ui.duel.wins[0] > ui.duel.wins[1] ? "#ff6b4a" : "#35d0c0" }}
+            >
+              PILOT {ui.duel.wins[0] > ui.duel.wins[1] ? 1 : 2} WINS
+            </h2>
+            <p className="font-display text-4xl leading-none">
+              {ui.duel.wins[0]} : {ui.duel.wins[1]}
+            </p>
+            <p className="text-sm italic text-cold">{ui.duel.taunt}</p>
+            <button
+              type="button"
+              className="btn-sheen relative mt-1 flex h-14 w-full items-center justify-between overflow-hidden border border-ember bg-ember px-5 text-left font-display text-xl font-semibold tracking-[0.16em] text-bg hover:brightness-110"
+              onClick={() => act((w) => startDuel(w))}
+            >
+              <span>REMATCH</span>
+              <span className="text-xs font-medium tracking-[0.14em]">ENTER</span>
+            </button>
+            <button type="button" className={row} onClick={() => act((w) => openMode(w, "menu"))}>
+              <span>MENU</span>
+            </button>
           </div>
         </div>
       )}

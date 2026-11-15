@@ -9,16 +9,18 @@ It's a love letter to the shooters we grew up on, mostly _Star Defender 2_ and _
 ## What's in it
 
 - **100 levels** in 10 rooms of the house, from the Old Bathroom through the Sewer and the Hot Kitchen to the Throne Room. Every room has its own army and its own boss.
-- **Two pilots on one screen.** Grab a friend. Stay close and you both hit harder; if one of you goes down, the other can fly over and pick them back up.
+- **Two pilots on one screen.** Grab a friend. Stay close and you both hit harder; if one of you goes down, the other can fly over and pick them back up. Fill both Super Flush bars, press bomb together, and the whole screen goes down the drain. After every level a card says who shot more, and gives the other one a title they did not ask for.
+- **Duel.** The same friend, now your enemy. One of you at the bottom, one at the top, gifts drifting down the middle, first to three rounds. Loser cleans the bathroom.
 - **Six guns**, each with six power levels and its own way of working: Bubble Blaster, Soap Cannon, Toothpaste Laser, Zap Brush, Flush Wave and Freshener Mist. More power means more of it in the air at once.
 - **Three second weapons** with limited ammo: homing plunger missiles, bath bombs and a paper roll that unrolls across a whole line.
 - **Fourteen ships** that all fly differently. A bathtub with two extra lives. A shopping cart that makes everything worth more. A toilet that brings its own brush.
 - **Enemies that fly in formation.** They loop in from the sides, settle into rows, diamonds, columns and arrowheads, and peel off to dive at you.
-- **Bosses with a move of their own.** Each one marks a column or a strip of the screen before it strikes, so you always get to see it coming.
+- **No two levels in a row feel the same.** Every room has a poop storm to survive (shoot it or dodge it), a bonus round, a mini-boss with bodyguards, and a pipe run where you thread the gaps or blast the valve and burst the whole pipe.
+- **Bosses with a move of their own.** Each one arrives with a name card and marks a column or a strip of the screen before it strikes, so you always get to see it coming.
 - **A shop** where the cash you earn turns into permanent upgrades.
 - **Three difficulty levels**, and **New Game+** once the Toilet King is down: the whole house again, tougher and better paid.
 - **Arcade mode** (no saves, no end, it just keeps getting worse) and a **Daily** run of 30 stages that's the same for everyone that day.
-- **Fifteen achievements** that pay cash the moment you earn them.
+- **Twenty achievements** that pay cash the moment you earn them.
 - **84 kinds of enemies**, ten bosses and 24 drawings of poop. Some split. Some bounce. One has a bee.
 
 ## How to play
@@ -34,6 +36,8 @@ Shoot everything. Don't get hit. Catch the gifts.
 | Slow, precise | left `Shift`                   | right `Shift`     |
 
 `Enter` confirms, `Esc` pauses. Every key can be changed in Options.
+
+**In a duel** pilot 1 flies the bottom half and pilot 2 the top half, with the same keys as above. There are no bombs: fly up to the middle line for a gift, if you dare.
 
 **Gamepads** work too: stick or d-pad to move (the stick is analog, a light push is a slow slide), A to fire, B or X to bomb, Y for the second weapon. With two pilots and one pad, the pad goes to the wingman, so one of you can stay on the keyboard.
 
@@ -97,7 +101,7 @@ Built with React, TanStack Start, Vite and a plain 2D canvas. Progress is saved 
 
 ## Status
 
-Still being worked on. Next up: proper music and an online leaderboard for the Daily run.
+Still being worked on. Next up: proper music.
 
 The pictures live in `public/art` and were drawn with ChatGPT to our brief; the backgrounds come from the first version of the game, built with Grok.
 

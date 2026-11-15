@@ -603,6 +603,11 @@ export const FEATS: Feat[] = [
   { id: "arcade10", name: "Ten in a Row", blurb: "Reach stage 10 in Arcade.", cash: 300, done: (c) => count(c, "arcade") >= 10 },
   { id: "arcade30", name: "Full Lap", blurb: "Reach stage 30 in Arcade.", cash: 1000, done: (c) => count(c, "arcade") >= 30 },
   { id: "royal_flush", name: "Royal Flush", blurb: "Beat the Toilet King.", cash: 1500, done: (c) => count(c, "boss9") > 0 },
+  { id: "umbrella", name: "Umbrella Not Included", blurb: "Get through a poop storm without being hit.", cash: 250, done: (c) => count(c, "stormClean") > 0 },
+  { id: "big_game", name: "Big Game Hunter", blurb: "Beat 10 mini-bosses.", cash: 400, done: (c) => count(c, "minis") >= 10 },
+  { id: "threader", name: "Thread the Needle", blurb: "Fly through 25 pipe gaps without a scratch.", cash: 300, done: (c) => count(c, "threads") >= 25 },
+  { id: "double_flush", name: "Double Flush", blurb: "Fire the Super Flush with a partner 3 times.", cash: 300, done: (c) => count(c, "supers") >= 3 },
+  { id: "duelist", name: "Loser Cleans the Bathroom", blurb: "Finish a duel.", cash: 200, done: (c) => count(c, "duels") > 0 },
   { id: "again", name: "Again, But Worse", blurb: "Beat the Toilet King in New Game+.", cash: 3000, done: (c) => count(c, "loopKing") > 0 },
 ];
 

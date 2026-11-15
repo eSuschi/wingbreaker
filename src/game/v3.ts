@@ -29,7 +29,27 @@ export type VHazard = {
   vy: number;
   t: number;
   phase: number;
+  /** pipe: centre of a second gap on wide screens */
+  x2?: number;
+  /** pipe: the valve's full health, and whether a pilot touched it or it has gone by */
+  max?: number;
+  hit?: boolean;
+  done?: boolean;
 };
+
+/** What a level is: the usual waves, or one of the set pieces every room has. */
+export type LevelKind = "waves" | "storm" | "bonus" | "mini" | "pipes" | "boss";
+
+/** Every room: 1-2 waves, 3 poop storm, 4 waves, 5 bonus, 6 mini-boss, 7 waves, 8 pipe run, 9 gauntlet, 10 boss. */
+export function levelKind(level: number): LevelKind {
+  const { k } = diff(level);
+  if (k === 10) return "boss";
+  if (k === 5) return "bonus";
+  if (k === 3) return "storm";
+  if (k === 6) return "mini";
+  if (k === 8) return "pipes";
+  return "waves";
+}
 
 export type Shot = {
   ox: number;
@@ -78,8 +98,8 @@ export function enemyBody(kind: VKind, level: number) {
   if (kind === "wedge") return { hp: 2 + Math.floor(lv / 15), r: 15, score: 130 + lv * 2, vy: 72, cash: 2 + tip };
   if (kind === "cruiser") return { hp: 7 + Math.floor(lv / 6), r: 22, score: 260 + lv * 3, vy: 48, cash: 5 + tip };
   // Tuned so a typical gun for that point in the campaign clears a boss in
-  // roughly 40 s (level 10) to 90 s (level 100) of steady fire.
-  const hp = Math.round(400 + lv * 9 + lv * lv * 0.12);
+  // roughly 30 s (level 10) to 60 s (level 100) of steady fire.
+  const hp = Math.round(300 + lv * 6.5 + lv * lv * 0.075);
   return { hp, r: 46, score: 4000 + lv * 40, vy: 46, cash: 30 + lv };
 }
 
@@ -88,13 +108,15 @@ export function enemyBody(kind: VKind, level: number) {
  * more than `cap` hostile shots on screen, each shooter resting cdMin..cdMax.
  */
 export function fireBudget(level: number, width = 700) {
-  const { d, lv } = diff(level);
+  const { d, lv, k } = diff(level);
   // A wide screen spreads the same shots over far more sky, so the budget
   // follows the width: a phone gets fewer shots than a desktop for the same
   // pressure on the pilot.
-  const wide = Math.max(0.75, Math.min(1.55, width / 700));
-  // the first five levels ease in, from about two thirds of the normal fire
-  const ease = lv >= 5 ? 1 : 0.55 + 0.09 * lv;
+  const wide = Math.max(0.75, Math.min(1.5, width / 700));
+  // the first five levels ease in, from about two thirds of the normal fire;
+  // a gauntlet (level 9 of a room) has four waves of bodies in the way already,
+  // so each of them shoots a little less
+  const ease = (lv >= 5 ? 1 : 0.55 + 0.09 * lv) * (k === 9 ? 0.85 : 1);
   const cap = Math.round((8 + 52 * Math.pow(d, 0.85)) * wide * ease);
   const rate = (1.2 + 4.3 * Math.pow(d, 0.9)) * wide * ease;
   const slow = 2.5 - (2.5 - 0.9) * Math.pow(d, 0.85);
@@ -118,7 +140,7 @@ export function volleySize(level: number, rollA: number, rollB: number) {
 }
 
 export function mayShoot(kind: string, role: string, level: number, id: number) {
-  if (role === "bonus" || role === "chip" || role === "rain" || role === "spore") return false;
+  if (role === "bonus" || role === "chip" || role === "rain" || role === "spore" || role === "storm" || role === "stormbig" || role === "mini") return false;
   const { lv } = diff(level);
   // the first levels teach dodging: only some of the formation fires
   if (lv <= 3) return kind === "wedge" || kind === "cruiser" || id % 3 === 0;
@@ -149,7 +171,7 @@ export function starsOf(perfect: boolean, noBomb: boolean, killed: number, born:
 
 export function fastKillLimit(level: number) {
   const { d } = diff(level);
-  return 45 + 55 * d;
+  return 34 + 40 * d;
 }
 
 /**
@@ -228,10 +250,15 @@ export function planLevel(level: number, W: number, H: number, seed: number) {
     }
     return { spawns: out, bonus: true, banner: "BONUS ROUND – NOBODY SHOOTS. CATCH THE SNACKS." };
   }
+  const set = levelKind(level);
+  if (set === "storm") return { spawns: planStorm(level, W, rng), bonus: false, banner: "POOP STORM – SHOOT IT OR DODGE IT" };
+  if (set === "pipes") return { spawns: [] as VSpawn[], bonus: false, banner: "PIPE RUN – FLY THROUGH THE GAPS" };
+  const mini = set === "mini";
   const f = DENSITY[k - 1] ?? 1;
-  const total = Math.max(12, Math.round((24 + 36 * d) * f));
+  // a mini-boss level is one short wave of its bodyguards, then the big one
+  const total = Math.max(12, Math.round((24 + 36 * d) * f * (mini ? 0.45 : 1)));
   const forms = ["grid", "vwing", "ring", "conga", "swoop", "rain", "pincer", "escort", "wall", "diamond", "columns", "chevrons"];
-  const waves = k >= 9 ? 4 : k >= 6 ? 3 : 2;
+  const waves = mini ? 1 : k >= 9 ? 4 : k >= 6 ? 3 : 2;
   const out: VSpawn[] = [];
   let left = total;
   for (let wave = 0; wave < waves; wave++) {
@@ -245,7 +272,8 @@ export function planLevel(level: number, W: number, H: number, seed: number) {
     const special = chapterRole(ch, k, wave);
     // The first wave settles lowest and later waves stack above it, so the
     // formations fill the upper half of the screen instead of one thin strip.
-    const base = H * (0.09 + 0.085 * (waves - 1 - wave));
+    // on a mini-boss level the bodyguards line up underneath, where the big one will hang
+    const base = mini ? H * (W < 560 ? 0.4 : 0.37) : H * (0.09 + 0.085 * (waves - 1 - wave));
     if (form === "grid" || form === "wall") {
       // the first grid is small fry with one trick critter per row; later grids are divers
       const walled = form === "wall" && wave === 0 && armyHas(ch, "wall");
@@ -405,7 +433,9 @@ export function planLevel(level: number, W: number, H: number, seed: number) {
       if (m === "rank" || m === "sine" || m === "swoop" || m === "spiral" || m === "hold") out[i].entry = entry;
     }
   }
-  if (ch >= 2 && k >= 6) {
+  // on a phone the health bar sits lower, under the score, so the big one hangs lower too
+  if (mini) out.push({ at: 4, kind: "cruiser", x: W / 2, motion: "hold", role: "mini", oy: H * (W < 560 ? 0.265 : 0.215) });
+  if (ch >= 2 && k >= 6 && !mini) {
     // a heavy with loot in the back row; in the Cleaning Closet it hides in a bucket
     out.push({ at: 1.2, kind: "cruiser", x: W * 0.3, motion: "hold", role: armyHas(ch, "hermit") ? "hermit" : "", oy: H * 0.18 });
   }
@@ -427,6 +457,97 @@ export function planLevel(level: number, W: number, H: number, seed: number) {
 }
 
 /**
+ * A poop storm: about 36 seconds of falling poop in four kinds of weather that take turns.
+ * Everything in it can be shot, so a curtain is a wall to fly around or a wall to blast open.
+ */
+function planStorm(level: number, W: number, rng: () => number): VSpawn[] {
+  const { d } = diff(level);
+  const out: VSpawn[] = [];
+  const lanes = Math.max(5, Math.min(16, Math.round(W / 78)));
+  const laneX = (i: number) => W * 0.06 + (W * 0.88 * i) / (lanes - 1);
+  const drop = (at: number, x: number, role = "storm", vx = 0) =>
+    out.push({ at, kind: role === "stormbig" ? "wedge" : "dart", x, motion: "fall", role, oy: -30, vx, spin: out.length });
+  const gapW = lanes >= 10 ? 3 : 2;
+  let gap = Math.floor(rng() * (lanes - gapW + 1));
+  let t = 1.2;
+  let turn = 0;
+  while (t < 36) {
+    const kind = turn % 4;
+    if (kind === 0) {
+      // drizzle: single drops all over
+      const n = Math.round(((5 + 9 * d) * lanes) / 8);
+      for (let i = 0; i < n; i++) drop(t + rng() * 3.2, laneX(Math.floor(rng() * lanes)) + (rng() - 0.5) * 20);
+      t += 3.6;
+    } else if (kind === 1) {
+      // curtain: a full row with one way through; the next way through is never far off
+      const rows = d > 0.45 ? 2 : 1;
+      for (let r = 0; r < rows; r++) {
+        const reach = Math.max(1, Math.round(lanes * 0.35));
+        gap = Math.max(0, Math.min(lanes - gapW, gap + Math.round((rng() * 2 - 1) * reach)));
+        for (let i = 0; i < lanes; i++) if (i < gap || i >= gap + gapW) drop(t + r * 1.7, laneX(i));
+      }
+      t += 2.4 + (rows - 1) * 1.7;
+    } else if (kind === 2) {
+      // a slanted line that sweeps across
+      const dir = rng() < 0.5 ? 1 : -1;
+      for (let i = 0; i < lanes; i++) drop(t + i * 0.15, laneX(dir > 0 ? i : lanes - 1 - i));
+      t += lanes * 0.15 + 1.5;
+    } else {
+      // the big ones: slow, tough, and three smaller ones when they pop
+      const n = 1 + (d > 0.3 ? 1 : 0) + (d > 0.7 ? 1 : 0);
+      for (let i = 0; i < n; i++) drop(t + i * 0.9, W * (0.2 + rng() * 0.6), "stormbig");
+      const extra = Math.round((2 + 4 * d) * (lanes / 8));
+      for (let i = 0; i < extra; i++) drop(t + 0.4 + rng() * 2.2, laneX(Math.floor(rng() * lanes)));
+      t += 3.2;
+    }
+    turn += 1;
+  }
+  return out;
+}
+
+/**
+ * A pipe run: a stack of sewer pipes scrolls down the screen, each with a gap to fly
+ * through. Shoot the red valve and the whole pipe bursts instead. The next gap is always
+ * within easy reach of the last one.
+ */
+function planPipes(level: number, W: number): VHazard[] {
+  const { d, ch, lv } = diff(level);
+  const rng = mulberry(lv * 7919 + 17);
+  const out: VHazard[] = [];
+  const count = 9 + Math.round(5 * d);
+  const vy = 110 + 70 * d;
+  const gapW = Math.max(118, Math.min(230, W * 0.3));
+  const reach = Math.min(W * 0.42, 320);
+  const twin = W > 820;
+  const edge = gapW / 2 + 14;
+  let x = W / 2;
+  for (let i = 0; i < count; i++) {
+    x = Math.max(edge, Math.min(W - edge, x + (rng() * 2 - 1) * reach));
+    // later rooms: every third gap slides along its pipe, and those have no valve
+    const slides = ch >= 3 && i % 3 === 2;
+    let x2: number | undefined;
+    if (twin) {
+      // a second way through on a wide screen, well away from the first
+      const other = x < W / 2 ? x + W * (0.34 + rng() * 0.2) : x - W * (0.34 + rng() * 0.2);
+      x2 = Math.max(edge, Math.min(W - edge, other));
+      if (Math.abs(x2 - x) < gapW * 1.6) x2 = undefined;
+    }
+    // the valve sits on solid pipe, on the side with the most room
+    const left = Math.min(x, x2 ?? x) - gapW / 2;
+    const right = W - Math.max(x, x2 ?? x) - gapW / 2;
+    let valve = left > right ? left * (0.3 + rng() * 0.4) : W - right * (0.3 + rng() * 0.4);
+    if (twin && x2 !== undefined) {
+      const lo = Math.min(x, x2) + gapW / 2;
+      const hi = Math.max(x, x2) - gapW / 2;
+      if (hi - lo > 120) valve = lo + (hi - lo) * (0.35 + rng() * 0.3);
+    }
+    const hp = slides ? 0 : Math.round(9 + lv * 0.33);
+    out.push({ kind: "pipe", x, x2, y: -70 - i * 300, w: gapW, h: 34, hp, max: hp, vx: slides ? (rng() < 0.5 ? -1 : 1) * (36 + 30 * d) : 0, vy, t: 0, phase: valve });
+  }
+  return out;
+}
+
+/**
  * Each room has up to two trick critters. The first shows up from the room's second level
  * (first level in later rooms), the second joins from the fourth, one wave each.
  */
@@ -440,6 +561,7 @@ function chapterRole(ch: number, k: number, wave: number) {
 
 export function planHazards(level: number, W: number, H: number): VHazard[] {
   const { ch, k } = diff(level);
+  if (levelKind(level) === "pipes") return planPipes(level, W);
   if (k < 4 || k === 5 || k === 10) return [];
   const out: VHazard[] = [];
   if (ch === 1) {
@@ -672,6 +794,11 @@ export const TIPS = [
   "Tip: FRESHENER MIST fades with distance. Get close, then regret it.",
   "Tip: Press F to toggle auto fire. Respect is optional.",
   "Tip: The rubber duck stops time. Nobody knows why. Don't ask.",
+  "Tip: In a pipe run, shoot the red valve and the whole pipe bursts. Or just fly through the gap like a normal person.",
+  "Tip: Everything in a poop storm can be shot. A wall of it is only a wall until you make a hole.",
+  "Tip: A mini-boss calls its friends twice. After that it is on its own, and it knows it.",
+  "Tip: Two pilots, two full Super Flush bars, two bomb buttons at once. The screen goes down the drain.",
+  "Tip: In a duel the loser of a round starts the next one behind a shield. It is called mercy.",
 ];
 
 export const LAST_WORDS = [
@@ -683,6 +810,47 @@ export const LAST_WORDS = [
   "AVENGE ME. OR DON'T.",
   "THIS WAS A RENTAL",
   "MY SNACKS…",
+];
+
+/** What the pilot who shot fewer gets called on the end-of-level card. */
+export const LOSER_TITLES = [
+  "MORAL SUPPORT",
+  "PROFESSIONAL BYSTANDER",
+  "HELD THE TOWEL",
+  "WAS ALSO THERE",
+  "SEAT WARMER",
+  "CHIEF OF WATCHING",
+  "BROUGHT SNACKS",
+  "DECORATIVE WINGMAN",
+  "FLEW IN CIRCLES, NICELY",
+  "SAVING AMMO FOR LATER",
+  "TOURIST",
+  "EMOTIONAL DAMAGE ONLY",
+];
+
+export const WINNER_TITLES = ["TOP PLUNGER", "FLUSH MASTER", "KING OF THE BOWL", "CHIEF UNCLOGGER", "THE REAL PILOT", "MVP (MOST VIOLENT PLUNGER)"];
+
+export const DUEL_TAUNTS = [
+  "Loser cleans the bathroom.",
+  "Somebody is doing the dishes tonight.",
+  "That is going in the family chat.",
+  "Rematch? The loser always says rematch.",
+  "Winner picks the snacks.",
+  "Flushed, fair and square.",
+];
+
+/** One line under a mini-boss's name card: the room's heavy, only bigger. */
+export const MINI_LINES = [
+  "Somebody left the tap running. On purpose.",
+  "It will not let go. It has never let go.",
+  "Eats socks. Wants seconds.",
+  "Full, and looking for somewhere to tip.",
+  "Mostly gas. All of it yours now.",
+  "Everything you ever flushed, back as one.",
+  "Clogged, angry, and coming at you tap first.",
+  "The little valve on top is whistling. Bad sign.",
+  "Please aim. It certainly will.",
+  "Solid gold. Still a bathtub.",
 ];
 
 export const BOMB_LINES = ["FRESH!", "LAVENDER STRIKE", "SPRING MEADOW", "PINE FOREST", "OCEAN BREEZE", "NEW CAR SMELL"];

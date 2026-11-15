@@ -19,12 +19,16 @@ import {
   starTotal,
   type Campaign,
   type RunSnap,
+  type SkinDef,
   type SkinId,
   type UpgradeId,
 } from "./meta";
 import {
   BOMB_LINES,
   BOSS_LINES,
+  DUEL_TAUNTS,
+  MINI_LINES,
+  levelKind,
   HONEY_RING,
   DEATH,
   FAMILIES,
@@ -54,6 +58,7 @@ import {
   starsOf,
   volley,
   type GunFamily,
+  type LevelKind,
   type VHazard,
 } from "./v3";
 
@@ -64,9 +69,29 @@ export let VIEW = 1;
 export type Kind = "dart" | "wedge" | "cruiser" | "drone" | "boss";
 /** W gun gift, S shield, B bomb, M second-weapon ammo, $ coin, D duck, L extra life, G magnet, Y brush buddy, C coffee, T star */
 export type PickupKind = "W" | "S" | "B" | "M" | "$" | "D" | "L" | "G" | "Y" | "C" | "T" | "F";
-export type Mode = "menu" | "shop" | "options" | "standby" | "play" | "pause" | "over" | "clear" | "victory" | "bridge" | "levels" | "guide" | "ranks" | "arcadeover";
-export type Motion = "rank" | "sine" | "swoop" | "pincer" | "hold" | "boss" | "spiral" | "zigzag" | "conga" | "rain" | "dive";
-export type Cue = "kill" | "big" | "hit" | "graze" | "pickup" | "hurt" | "shield" | "bomb" | "wave" | "boss" | "clean" | "drive" | "missile" | "plink";
+export type Mode = "menu" | "shop" | "options" | "standby" | "play" | "pause" | "over" | "clear" | "victory" | "bridge" | "levels" | "guide" | "ranks" | "arcadeover" | "duelover";
+export type Motion = "rank" | "sine" | "swoop" | "pincer" | "hold" | "boss" | "spiral" | "zigzag" | "conga" | "rain" | "dive" | "fall";
+export type Cue =
+  | "kill"
+  | "big"
+  | "hit"
+  | "graze"
+  | "pickup"
+  | "hurt"
+  | "shield"
+  | "bomb"
+  | "wave"
+  | "boss"
+  | "clean"
+  | "drive"
+  | "missile"
+  | "plink"
+  | "splat"
+  | "fart"
+  | "flush"
+  | "valve"
+  | "ready"
+  | "card";
 
 export type Bullet = {
   x: number;
@@ -102,6 +127,27 @@ export type Bullet = {
 export type Puff = { x: number; y: number; life: number; max: number; style: number; size: number };
 /** A lightning jump between two critters. */
 export type Arc = { x1: number; y1: number; x2: number; y2: number; life: number };
+
+/** A critter's picture for the moment after it dies: it swells, goes white and is gone. */
+export type Pop = { x: number; y: number; look: number; kind: Kind; ch: number; role: string; size: number; life: number; max: number; spin: number; hurt: boolean };
+/** The mess left on the sky where something died. */
+export type Splat = { x: number; y: number; r: number; life: number; max: number; seed: number; color: string };
+
+/** Two pilots against each other: one at the bottom, one at the top, first to three rounds. */
+export type Duel = {
+  hp: [number, number];
+  wins: [number, number];
+  round: number;
+  state: "ready" | "fight" | "ko";
+  /** seconds left on the countdown, or on the pause after a knockout */
+  wait: number;
+  giftT: number;
+  /** who took the last round, -1 before the first */
+  last: number;
+  taunt: string;
+  /** seconds this round has been fought: a long round turns into sudden death */
+  clock: number;
+};
 
 export type Enemy = {
   kind: Kind;
@@ -281,6 +327,24 @@ export type World = {
   /** both pilots flying close: shared damage bonus */
   link: boolean;
   linkCd: number;
+  pops: Pop[];
+  splats: Splat[];
+  /** the name card of a boss or mini-boss that has just arrived; nothing hurts it until the card is gone */
+  intro: { t: number; max: number; tag: string; title: string; sub: string } | null;
+  /** which set piece this level is */
+  kind: LevelKind;
+  /** poop storm: when the last drop falls, on the spawn clock */
+  stormEnd: number;
+  /** two pilots: each one's Super Flush charge, 0..100 */
+  team: [number, number];
+  /** one pilot has called the Super Flush and waits a moment for the other */
+  superWait: { who: number; t: number } | null;
+  /** seconds left of the Super Flush whirl on screen */
+  superT: number;
+  superTold: boolean;
+  /** two pilots: levels each has won on kills since they took off */
+  series: [number, number];
+  duel: Duel | null;
 };
 
 export type InputState = {
@@ -347,11 +411,16 @@ export function fitWorld(w: World, cssW: number, cssH: number) {
   };
   place(w.player);
   w.player.x = clamp(w.player.x, 22, WORLD_W - 22);
-  w.player.y = clamp(w.player.y, laneTop(), WORLD_H - 36);
+  w.player.y = clamp(w.player.y, w.duel ? WORLD_H * 0.53 : laneTop(), WORLD_H - 36);
   if (w.wing) {
     place(w.wing);
     w.wing.x = clamp(w.wing.x, 22, WORLD_W - 22);
-    w.wing.y = clamp(w.wing.y, laneTop(), WORLD_H - 36);
+    w.wing.y = w.duel ? clamp(w.wing.y, 40, WORLD_H * 0.47) : clamp(w.wing.y, laneTop(), WORLD_H - 36);
+  }
+  for (const h of w.hazards) {
+    h.x *= sx;
+    if (h.x2 !== undefined) h.x2 *= sx;
+    if (h.kind === "pipe") h.phase *= sx;
   }
   for (const s of w.stars) {
     s.x *= sx;
@@ -505,6 +574,17 @@ export function createWorld(best = 0): World {
     tally: [0, 0],
     link: false,
     linkCd: 0,
+    pops: [],
+    splats: [],
+    intro: null,
+    kind: "waves",
+    stormEnd: 0,
+    team: [0, 0],
+    superWait: null,
+    superT: 0,
+    superTold: false,
+    series: [0, 0],
+    duel: null,
   };
 }
 
@@ -579,11 +659,17 @@ export function persist(w: World, run: RunSnap | null) {
 }
 
 export function saveNow(w: World) {
+  // a duel is a party game on the side: it never becomes the saved run
+  if (w.duel) return;
   const live = w.mode === "play" || w.mode === "pause";
   persist(w, live ? liveSnap(w) : w.snap);
 }
 
 export function openMode(w: World, mode: Mode) {
+  if (mode === "menu" && w.duel) {
+    endDuel(w);
+    return;
+  }
   if ((mode === "shop" || mode === "options") && w.mode !== "shop" && w.mode !== "options") {
     w.returnMode = w.mode === "play" ? "pause" : w.mode;
   }
@@ -763,6 +849,12 @@ function resetField(w: World) {
   w.tally = [0, 0];
   w.link = false;
   w.linkCd = 0;
+  w.pops = [];
+  w.splats = [];
+  w.intro = null;
+  w.stormEnd = 0;
+  w.superWait = null;
+  w.superT = 0;
 }
 
 /** Adds to a lifetime counter and pays out any achievement that it completes. */
@@ -777,7 +869,20 @@ function note(w: World, key: string, n = 1, max = false) {
 
 /** The ship a pilot is flying: the wingman has a hangar slot of their own. */
 export function shipOf(w: World, p: Player) {
-  return skinDef(p === w.wing ? w.meta.skin2 : w.meta.skin);
+  const def = skinDef(p === w.wing ? w.meta.skin2 : w.meta.skin);
+  return w.duel ? fairShip(def) : def;
+}
+
+const fair = new Map<string, SkinDef>();
+
+/** In a duel every ship flies the same: only the looks differ. */
+function fairShip(def: SkinDef): SkinDef {
+  let f = fair.get(def.id);
+  if (!f) {
+    f = { ...def, speed: 1, hit: 1, rate: 1, dmg: 1, shield: false, buddy: false, magnet: 0, charge: 1, ammo: 0, cash: 1 };
+    fair.set(def.id, f);
+  }
+  return f;
 }
 
 function parkPlayer(w: World, snap: RunSnap | null) {
@@ -867,6 +972,9 @@ export function startCoop(w: World) {
 }
 
 export function chooseCrew(w: World, crew: "solo" | "coop") {
+  w.series = [0, 0];
+  w.team = [0, 0];
+  w.superTold = false;
   w.meta.crew = crew;
   w.pinned = null;
   w.arcade = false;
@@ -1030,16 +1138,23 @@ function launchLevel(w: World) {
   w.born = 0;
   w.slain = 0;
   w.replay = !w.arcade && (w.meta.stars[n] ?? 0) > 0;
+  w.kind = levelKind(n);
+  w.stormEnd = 0;
+  w.intro = null;
   const planned = planLevel(n, WORLD_W, WORLD_H, (w.seed || n * 997) + n * 13);
   w.hazards = planHazards(n, WORLD_W, WORLD_H);
   if (isBossLevel(n)) {
     const line = BOSS_LINES[Math.min(9, Math.floor((n - 1) / 10))];
-    w.banner = line ? line[0] : ch.boss.toUpperCase();
-    w.bannerT = 2;
+    // the boss gets a name card instead of a banner, and holds its fire until the card is gone
+    w.banner = "";
+    w.bannerT = 0;
+    w.intro = { t: 2.6, max: 2.6, tag: `${ch.name.toUpperCase()} · BOSS`, title: line ? line[0] : ch.boss.toUpperCase(), sub: line?.[1] ?? "" };
     w.bossUp = true;
     w.cues.push("boss");
+    w.cues.push("card");
     spawnEnemy(w, "boss", WORLD_W / 2, "boss", undefined, -48);
     const boss = w.enemies[w.enemies.length - 1];
+    if (boss) boss.fire = 2.9;
     if (boss && w.arcade) {
       const spec = arcadeStage(w.arcadeStage);
       if (spec.boss) {
@@ -1050,7 +1165,7 @@ function launchLevel(w: World) {
     return;
   }
   w.banner = planned.banner || `${ch.name.toUpperCase()}  ${String(n).padStart(2, "0")}`;
-  w.bannerT = planned.bonus ? 2.2 : 1.25;
+  w.bannerT = planned.bonus || w.kind !== "waves" ? 2.4 : 1.25;
   w.cues.push("wave");
   const list = planned.spawns.map((s) => ({
     at: s.at,
@@ -1066,6 +1181,9 @@ function launchLevel(w: World) {
   }));
   grant(list, n);
   w.spawns = list;
+  if (w.kind === "storm") w.stormEnd = list.reduce((m, sp) => Math.max(m, sp.at), 0) + 4.5;
+  // a pipe run counts its pipes: every one burst at the valve is one "shot down"
+  if (w.kind === "pipes") w.born = w.hazards.reduce((m, h) => m + (h.kind === "pipe" ? 1 : 0), 0);
 }
 
 function clamp(v: number, a: number, b: number) {
@@ -1113,7 +1231,7 @@ function spawnEnemy(
   const body = enemyBody(kind, level);
   const size = sizeMul(WORLD_W);
   let hp = body.hp;
-  const r = body.r * size;
+  let r = body.r * size;
   // a lid or a broom is tougher than the small fry it shields, and hides behind a plate
   if (role === "wall") hp = Math.ceil(hp * 1.5);
   // the shell already makes it slow to kill; keep it from becoming a sponge
@@ -1126,9 +1244,23 @@ function spawnEnemy(
   if (role === "forge") {
     /* plate is the armor */
   }
-  const score = body.score;
-  const vy = role === "rain" ? 180 : motion === "conga" ? 120 : body.vy;
-  const fire = motion === "boss" ? 1.1 : 0;
+  let score = body.score;
+  let vy = role === "rain" ? 180 : motion === "conga" ? 120 : body.vy;
+  if (role === "storm" || role === "stormbig") {
+    // storm poop: the big ones are slow and tough and burst into three
+    const d = Math.min(1, (level - 1) / 99);
+    const big = role === "stormbig";
+    if (big) hp = Math.ceil((4 + level / 8) * (w.coop ? 1.35 : 1) * tuning(w).hp);
+    r = (big ? 27 : 15) * size;
+    vy = (150 + 110 * d) * (big ? 0.62 : 0.9 + w.rng() * 0.22) * tuning(w).speed;
+  }
+  if (role === "mini") {
+    // the room's heavy at nearly twice the size, with a fifth of a boss's health
+    hp = Math.round(enemyBody("boss", level).hp * 0.2 * (w.coop ? 1.35 : 1) * tuning(w).hp);
+    r = body.r * size * 1.75;
+    score = body.score * 5;
+  }
+  const fire = motion === "boss" ? 1.1 : role === "mini" ? 2.3 : 0;
   w.enemies.push({
     kind,
     x,
@@ -1181,8 +1313,44 @@ function spawnEnemy(
     e.y = sy;
   }
   w.born += 1;
+  if (role === "mini") {
+    const e = w.enemies[w.enemies.length - 1];
+    // slow enough that a shot fired from the bottom of the screen still finds it
+    e.vx = -clamp(WORLD_W * 0.05, 34, 60);
+    w.intro = { t: 1.8, max: 1.8, tag: "MINI-BOSS", title: `BIG ${lookName(e.look).toUpperCase()}`, sub: MINI_LINES[ch] ?? "" };
+    w.cues.push("boss");
+    w.cues.push("card");
+  }
   const id = role || kind;
   if (!w.meta.seen.includes(id)) w.meta.seen.push(id);
+}
+
+const MUCK = ["#6a4424", "#7a5230", "#5a3a1e", "#84582c"];
+
+/** Leaves a mess on the sky. */
+function splat(w: World, x: number, y: number, r: number, color?: string) {
+  if (w.splats.length > 26) w.splats.shift();
+  const life = w.reduce ? 0.45 : 0.9;
+  w.splats.push({ x, y, r, life, max: life, seed: Math.floor(w.rng() * 1000), color: color ?? MUCK[Math.floor(w.rng() * MUCK.length)] });
+}
+
+/** The dying critter's picture, kept for a moment so the kill can be seen. */
+function pop(w: World, e: Enemy) {
+  if (w.pops.length > 24) w.pops.shift();
+  const life = e.kind === "boss" ? 0.55 : e.role === "mini" ? 0.4 : e.kind === "cruiser" ? 0.3 : 0.2;
+  w.pops.push({ x: e.x, y: e.y, look: e.look, kind: e.kind, ch: e.ch, role: e.role, size: e.size ?? 1, life, max: life, spin: e.spin, hurt: e.mark >= 2 });
+}
+
+/** Two pilots: kills fill each one's Super Flush charge. */
+function addTeam(w: World, who: number, amount: number) {
+  if (!w.wing || w.duel || w.arcade || (who !== 0 && who !== 1)) return;
+  w.team[who] = Math.min(100, w.team[who] + amount);
+  if (!w.superTold && w.team[0] >= 100 && w.team[1] >= 100) {
+    w.superTold = true;
+    w.banner = "SUPER FLUSH READY – BOTH PRESS BOMB";
+    w.bannerT = 2.2;
+    w.cues.push("ready");
+  }
 }
 
 function burst(w: World, x: number, y: number, color: string, n: number, speed: number, chunk = false) {
@@ -1288,18 +1456,29 @@ function killEnemy(w: World, e: Enemy) {
   ring(w, e.x, e.y, big ? pal.accent : pal.edge, heavy ? 0.42 : 0.2, e.r, heavy ? 2.4 : 1.1);
   ring(w, e.x, e.y, "#f4fbff", heavy ? 0.28 : 0.14, Math.max(4, e.r * 0.45), 1);
   const trauma = e.kind === "boss" ? 0.92 : e.kind === "cruiser" ? 0.62 : e.kind === "drone" ? 0.36 : e.kind === "wedge" ? 0.16 : 0.14;
-  addTrauma(w, trauma);
+  addTrauma(w, e.role === "mini" ? 0.8 : trauma);
   if (e.kind === "boss") w.hitstop = 0.12;
+  else if (e.role === "mini") w.hitstop = 0.09;
   else if (e.kind === "cruiser") w.hitstop = 0.05;
   else if (e.kind === "drone") w.hitstop = 0.026;
-  w.cues.push(big ? "big" : "kill");
-  if (e.by === 0 || e.by === 1) w.tally[e.by] += 1;
+  const poop = e.role === "storm" || e.role === "stormbig";
+  pop(w, e);
+  splat(w, e.x, e.y, e.r * (e.kind === "boss" ? 3 : big ? 2.2 : poop ? 1.9 : 1.5), poop ? undefined : w.rng() < 0.5 ? undefined : pal.flame);
+  if (e.kind === "boss") {
+    w.cues.push("big");
+    w.cues.push("flush");
+  } else if (big) w.cues.push("fart");
+  else w.cues.push(poop ? "splat" : "kill");
+  if (e.by === 0 || e.by === 1) {
+    w.tally[e.by] += 1;
+    addTeam(w, e.by, e.kind === "cruiser" ? 10 : e.kind === "boss" ? 0 : 2.5);
+  }
   addScore(w, e.score, e.x, e.y, big);
   if (e.kind === "cruiser") {
     float(w, e.x, e.y - 22, lookName(e.look).toUpperCase(), true);
     if (w.rng() < 0.25) float(w, e.x, e.y - 40, LAST_WORDS[Math.floor(w.rng() * LAST_WORDS.length)] ?? "WORTH IT");
   }
-  if (e.role !== "chip" && e.role !== "spore" && e.role !== "rain") note(w, "kills");
+  if (e.role !== "chip" && e.role !== "spore" && e.role !== "rain" && !poop) note(w, "kills");
   if (e.kind === "boss") {
     // whatever it had marked dies with it
     w.hazards = w.hazards.filter((h) => h.kind !== "strike" && h.kind !== "sweep");
@@ -1328,6 +1507,14 @@ function killEnemy(w: World, e: Enemy) {
     dropPickup(w, "D", e.x, e.y, 0);
   }
   if (e.role === "bonus" && w.rng() < 0.45) dropPickup(w, "F", e.x, e.y, 5 + Math.floor(w.level * 0.25));
+  if (e.role === "stormbig") {
+    for (let i = -1; i <= 1; i++) spawnEnemy(w, "dart", e.x + i * 14, "fall", undefined, e.y, i * 70, i, e.y, 0, "storm");
+  }
+  if (e.role === "mini") {
+    note(w, "minis");
+    miniLoot(w, e);
+    return;
+  }
   if (e.role === "splash") {
     // Auto-Flush: goes out with a splash, a low fan of slow shots straight down
     for (let i = -2; i <= 2; i++) pushHostile(w, e.x, e.y, Math.PI / 2 + i * 0.3, 150, 5, 0);
@@ -1343,7 +1530,7 @@ function killEnemy(w: World, e: Enemy) {
   } else {
     const base = e.kind === "cruiser" ? 0.28 : e.kind === "wedge" ? 0.16 : e.kind === "drone" ? 0.13 : 0.11;
     // late formations are three times the size, so each enemy drops less often
-    const thin = 1 - 0.5 * Math.min(1, (w.level - 1) / 99);
+    const thin = (1 - 0.5 * Math.min(1, (w.level - 1) / 99)) * (poop ? 0.35 : 1);
     const chance = Math.min(0.48, base * thin * luckMul(w.arcade ? 0 : w.meta.upgrades.luck));
     // never more than a few gifts in the air: the screen belongs to the poop
     if (w.rng() < chance && w.pickups.length < 3) {
@@ -1353,6 +1540,24 @@ function killEnemy(w: World, e: Enemy) {
       dropPickup(w, kind, e.x, e.y, kind === "$" ? 5 + Math.floor(w.level * 0.3) : 0);
     }
   }
+}
+
+/** A mini-boss pays out like a small boss: a gun gift, a shield and a handful of coins. */
+function miniLoot(w: World, e: Enemy) {
+  const base = 10 + Math.round(w.level * 0.5);
+  const items: { kind: PickupKind; value: number }[] = [
+    { kind: "$", value: base },
+    { kind: "W", value: 0 },
+    { kind: "$", value: base + 6 },
+    { kind: "S", value: 0 },
+    { kind: "$", value: base + 12 },
+  ];
+  items.forEach((item, i) => {
+    const a = Math.PI * (0.1 + (0.8 * i) / (items.length - 1));
+    const hue = item.kind === "W" ? Math.max(0, FAMILIES.indexOf(nearestPilot(w, e.x, e.y).family)) : undefined;
+    w.pickups.push({ kind: item.kind, value: hue ?? item.value, hue, x: e.x, y: e.y + 6, vx: Math.cos(a) * 46, vy: 44 + (i % 3) * 9, rest: 0 });
+  });
+  float(w, e.x, e.y - 40, "LOOT", true);
 }
 
 function bossLoot(w: World, e: Enemy) {
@@ -1639,13 +1844,15 @@ function firePlayer(w: World, p: Player, focus: boolean) {
   const ship = shipOf(w, p);
   const kick = (feed ? 1.18 : 1) * (w.link ? 1.25 : 1) * ship.dmg;
   const owner = p === w.wing ? 1 : 0;
+  // in a duel the top pilot faces down
+  const up = w.duel && p === w.wing ? -1 : 1;
   for (const s of pack.shots) {
     if (w.bullets.length > 260) break;
     w.bullets.push({
       x: p.x + s.ox,
-      y: p.y - 18 + (s.oy ?? 0),
+      y: p.y + up * (-18 + (s.oy ?? 0)),
       vx: s.vx,
-      vy: s.vy,
+      vy: s.vy * up,
       r: s.r,
       friendly: true,
       dmg: s.dmg * kick,
@@ -1669,7 +1876,7 @@ function firePlayer(w: World, p: Player, focus: boolean) {
       x: p.x + Math.cos(a) * 34,
       y: p.y + Math.sin(a) * 14 - 6,
       vx: 0,
-      vy: -700,
+      vy: -700 * up,
       r: 2.4,
       friendly: true,
       dmg: 4 * pack.cd * kick,
@@ -1693,7 +1900,7 @@ function firePlayer(w: World, p: Player, focus: boolean) {
       x: p.x + Math.cos(a) * 28,
       y: p.y + Math.sin(a) * 11,
       vx: 0,
-      vy: -640,
+      vy: -640 * up,
       r: 1.6,
       friendly: true,
       dmg: 0.35 * kick,
@@ -1938,6 +2145,131 @@ function runBoss(w: World, e: Enemy) {
   }
 }
 
+/** A mini-boss takes turns: a fan at the pilot, a spray across the screen, a few friends. Below half health it gets angry. */
+function runMini(w: World, e: Enemy) {
+  const who = nearestPilot(w, e.x, e.y);
+  const aim = Math.atan2(who.y - e.y, who.x - e.x);
+  const speed = fireBudget(w.level, WORLD_W).speed * tuning(w).speed;
+  const angry = e.hp < e.max * 0.5;
+  if (angry && e.mark === 0) {
+    e.mark = 1;
+    e.vx *= 1.3;
+    e.flash = 0.3;
+    w.banner = "NOW IT'S ANGRY";
+    w.bannerT = 1;
+    addTrauma(w, 0.3);
+    w.cues.push("boss");
+  }
+  e.sig = (e.sig ?? 0) + 1;
+  const turn = e.sig % 3;
+  const shape = poopShape(e.ch, w.level, w.rng());
+  const whole = shape === 5 || shape === 9;
+  const crowd = w.enemies.reduce((n, o) => n + (o.hp > 0 ? 1 : 0), 0);
+  // a narrow screen gets a thinner spray
+  const fit = Math.max(0.6, Math.min(1, WORLD_W / 700));
+  if (turn === 2) {
+    const n = Math.max(4, Math.round((angry ? 9 : 7) * fit));
+    for (let i = 0; i < n; i++) pushHostile(w, e.x, e.y + e.r * 0.4, Math.PI * (0.12 + (0.76 * i) / (n - 1)), speed * 0.85, 6, shape, whole);
+  } else if (turn === 0 && crowd < 7 && e.hide < 2) {
+    // it calls for help twice in a fight, no more: the fight is with the big one
+    e.hide += 1;
+    // one on each side, so the way to the big one stays open
+    for (const i of [-1, 1]) {
+      spawnEnemy(w, "dart", clamp(e.x + i * (e.r + 44), 40, WORLD_W - 40), "sine", undefined, e.y + 10, 0, undefined, Math.min(WORLD_H * 0.46, e.y + e.r * 0.6), 0, "", 0);
+    }
+  } else {
+    const n = angry ? 5 : 3;
+    for (let i = 0; i < n; i++) pushHostile(w, e.x, e.y + e.r * 0.6, aim + (i - (n - 1) / 2) * 0.2, speed * 1.1, 6, shape, whole);
+  }
+  e.fire = (angry ? 1.6 : 2.1) / Math.sqrt(tuning(w).heat);
+}
+
+function inGap(h: VHazard, x: number, slack: number) {
+  return Math.abs(x - h.x) < h.w / 2 - slack || (h.x2 !== undefined && Math.abs(x - h.x2) < h.w / 2 - slack);
+}
+
+/** A pipe breaks open: at the valve (the pilot who shot it gets the credit), or from a bomb (owner -1). */
+function burstPipe(w: World, h: VHazard, owner: number) {
+  if (h.kind !== "pipe") return;
+  h.kind = "dead";
+  const pal = chapterOf(Math.max(1, w.level));
+  for (let x = 20; x < WORLD_W; x += 54) {
+    if (inGap(h, x, 0)) continue;
+    burst(w, x, h.y, x % 108 < 54 ? pal.edge : "#8a8f96", 3, 210, true);
+  }
+  splat(w, h.phase, h.y, 46);
+  splat(w, clamp(h.phase + (w.rng() - 0.5) * 220, 30, WORLD_W - 30), h.y + 10, 30);
+  ring(w, h.phase, h.y, "#f4fbff", 0.3, 16, 2);
+  addTrauma(w, 0.45);
+  w.hitstop = Math.max(w.hitstop, 0.03);
+  w.cues.push("valve");
+  if (owner >= 0) {
+    w.slain += 1;
+    if (owner === 0 || owner === 1) {
+      w.tally[owner] += 1;
+      addTeam(w, owner, 6);
+    }
+    bank(w, 8 + Math.round(w.level * 0.3), h.phase, h.y, true);
+    float(w, h.phase, h.y - 34, "PIPE BURST", true);
+    // the level's gun gift is behind the first valve
+    if (w.slain === 1) dropPickup(w, "W", h.phase, h.y + 20);
+  }
+}
+
+function stepPipe(w: World, h: VHazard, dt: number) {
+  const half = h.h / 2;
+  const edge = h.w / 2 + 14;
+  if (h.vx !== 0 && (h.x < edge || h.x > WORLD_W - edge)) {
+    h.vx *= -1;
+    h.x = clamp(h.x, edge, WORLD_W - edge);
+  }
+  // shots stop at the pipe; the valve takes the ones meant for it
+  for (const b of w.bullets) {
+    if (b.life <= 0 || Math.abs(b.y - h.y) > half + b.r) continue;
+    if (inGap(h, b.x, 0)) continue;
+    b.life = 0;
+    if (!b.friendly) continue;
+    if (h.hp > 0 && Math.abs(b.x - h.phase) < 26 + b.r) {
+      h.hp -= b.style === STYLE.mist ? b.dmg * mistPower(b.life) : b.dmg;
+      h.t = 0.12;
+      w.cues.push("hit");
+      if (h.hp <= 0) {
+        burstPipe(w, h, b.owner ?? 0);
+        return;
+      }
+    } else if (w.parts.length < 160) burst(w, b.x, h.y + half, "#f7fbff", 2, 110, false);
+  }
+  const crew = living(w);
+  for (const p of crew) {
+    if (Math.abs(p.y - h.y) < half + 9 && !inGap(h, p.x, 9) && p.inv <= 0) {
+      h.hit = true;
+      hurtPlayer(w, p);
+      // long enough for the pipe to go by, whatever it cost
+      p.inv = Math.max(p.inv, 0.8);
+    }
+  }
+  if (!h.done && crew.length && crew.every((p) => h.y - half > p.y + 12)) {
+    h.done = true;
+    if (!h.hit) {
+      const who = crew[0];
+      bank(w, 3 + Math.round(w.level * 0.12), who.x, who.y - 4, true);
+      float(w, who.x, who.y - 40, "THREADED", true);
+      note(w, "threads");
+    }
+  }
+  // later rooms: the joints drip
+  const d = Math.min(1, (w.level - 1) / 99);
+  if (w.level > 20 && h.y > 10 && h.y < WORLD_H * 0.45 && w.freeze <= 0 && w.rng() < dt * (0.2 + 0.6 * d)) {
+    for (let tries = 0; tries < 4; tries++) {
+      const x = 24 + w.rng() * (WORLD_W - 48);
+      if (inGap(h, x, -12)) continue;
+      pushHostile(w, x, h.y + half + 6, Math.PI / 2, h.vy + 70 + 60 * d, 5, poopShape(Math.floor((w.level - 1) / 10), w.level, w.rng()), true);
+      break;
+    }
+  }
+  if (h.y - half > WORLD_H + 24) h.kind = "dead";
+}
+
 function cashBullets(w: World) {
   for (const b of w.bullets) {
     if (b.friendly || b.life <= 0) continue;
@@ -1963,16 +2295,30 @@ function nearestEnemy(w: World, x: number, y: number): Enemy | null {
 function reap(w: World) {
   const next: Enemy[] = [];
   let bossDied = false;
+  let miniDied = false;
   for (const e of w.enemies) {
     if (e.gone) continue;
     if (e.hp <= 0) {
       if (e.kind === "boss") bossDied = true;
+      if (e.role === "mini") miniDied = true;
       killEnemy(w, e);
       continue;
     }
     next.push(e);
   }
   w.enemies = next;
+  if (miniDied && !w.enemies.some((e) => e.role === "mini")) {
+    // the bodyguards do not stay to argue
+    for (const e of w.enemies) {
+      const pal = chapterOf(Math.max(1, e.ch * 10 + 1));
+      burst(w, e.x, e.y, pal.edge, 8, 160, true);
+      pop(w, e);
+      w.slain += 1;
+    }
+    w.enemies = [];
+    w.spawns = [];
+    w.bullets = w.bullets.filter((b) => b.friendly);
+  }
   if (bossDied) {
     // the boss's helpers go down with it, so the fight always ends
     for (const e of w.enemies) {
@@ -1989,9 +2335,64 @@ function reap(w: World) {
   }
 }
 
+/** The bomb button. With two pilots and both charges full it calls the Super Flush instead. */
 function detonate(w: World, who?: Player) {
   const owner = who && who.alive ? who : w.player.alive ? w.player : w.wing;
-  if (!owner || !owner.alive || w.player.bombs <= 0 || w.mode !== "play") return;
+  if (!owner || !owner.alive || w.mode !== "play" || w.duel) return;
+  if (w.wing && w.team[0] >= 100 && w.team[1] >= 100 && w.player.alive && w.wing.alive) {
+    const me = owner === w.wing ? 1 : 0;
+    if (w.superWait) {
+      if (w.superWait.who !== me) superFlush(w);
+      return;
+    }
+    // the first press waits a moment for the partner, safe while it waits;
+    // if the partner does not press, it is an ordinary bomb
+    w.superWait = { who: me, t: 0.8 };
+    owner.inv = Math.max(owner.inv, 1);
+    float(w, owner.x, owner.y - 40, "PARTNER – PRESS BOMB!", true);
+    ring(w, owner.x, owner.y, "#7eb6d6", 0.5, 14, 2.4);
+    w.cues.push("ready");
+    return;
+  }
+  blast(w, owner);
+}
+
+/** Both pilots pressed together: the whole screen goes down the drain. Costs no bombs. */
+function superFlush(w: World) {
+  const a = w.player;
+  const b = w.wing;
+  if (!b) return;
+  w.team = [0, 0];
+  w.superWait = null;
+  w.superTold = false;
+  w.superT = 1.5;
+  w.flash = 0.4;
+  w.hitstop = 0.08;
+  addTrauma(w, 1);
+  cashBullets(w);
+  for (const e of w.enemies) {
+    if (e.kind === "boss") {
+      if (!w.intro) e.hp -= e.max * 0.15;
+    } else if (e.role === "mini") e.hp -= e.max * 0.5;
+    else e.hp = 0;
+    e.flash = 0.2;
+  }
+  for (const h of w.hazards) if (h.kind === "pipe" && h.y > -30 && h.y < WORLD_H) burstPipe(w, h, -1);
+  for (const p of [a, b]) {
+    p.inv = Math.max(p.inv, 3);
+    p.feed = Math.max(p.feed, 6);
+    ring(w, p.x, p.y, "#7eb6d6", 0.6, 14, 3);
+  }
+  w.banner = "SUPER FLUSH!";
+  w.bannerT = 1.4;
+  w.cues.push("flush");
+  w.cues.push("big");
+  note(w, "supers");
+  reap(w);
+}
+
+function blast(w: World, owner: Player) {
+  if (!owner.alive || w.player.bombs <= 0 || w.mode !== "play") return;
   w.player.bombs -= 1;
   if (w.wing) w.wing.bombs = w.player.bombs;
   w.bombsUsed += 1;
@@ -2008,9 +2409,11 @@ function detonate(w: World, who?: Player) {
         e.hp -= e.max * 0.06;
         w.bombArmor = 1.5;
       }
-    } else e.hp = 0;
+    } else if (e.role === "mini") e.hp -= e.max * 0.3;
+    else e.hp = 0;
     e.flash = 0.1;
   }
+  for (const h of w.hazards) if (h.kind === "pipe" && h.y > -30 && h.y < WORLD_H) burstPipe(w, h, -1);
   const line = BOMB_LINES[Math.floor(w.rng() * BOMB_LINES.length)] ?? "FRESH!";
   w.banner = line;
   w.bannerT = 0.8;
@@ -2070,6 +2473,11 @@ function present(w: World, dt: number, timers: boolean) {
   }
   for (const p of w.puffs) p.life -= dt;
   w.puffs = w.puffs.filter((p) => p.life > 0);
+  for (const p of w.pops) p.life -= dt;
+  w.pops = w.pops.filter((p) => p.life > 0);
+  for (const sp of w.splats) sp.life -= dt;
+  w.splats = w.splats.filter((sp) => sp.life > 0);
+  w.superT = Math.max(0, w.superT - dt);
   for (const a of w.arcs) a.life -= dt;
   w.arcs = w.arcs.filter((a) => a.life > 0);
   for (const f of w.floaters) {
@@ -2126,9 +2534,17 @@ function holdPlace(w: World, e: Enemy, dt: number) {
     e.flash = 0.55;
     e.ox = clamp(e.x, edgeOf(e.kind), WORLD_W - edgeOf(e.kind));
   }
+  if (e.motion === "fall") {
+    e.y += e.vy * dt;
+    e.x += e.vx * dt;
+    if (e.role === "stormbig") e.x += Math.sin(e.t * 1.3 + e.spin) * 22 * dt;
+    if (e.y > WORLD_H + 50 || e.x < -60 || e.x > WORLD_W + 60) e.gone = true;
+    return;
+  }
   if (e.motion === "boss") {
     // low enough that the big sprites clear the health bar at the top of the screen
-    const nest = 110 + 42 * (e.size ?? 1);
+    // (on a phone the bar sits lower, under the score, so the boss does too)
+    const nest = (WORLD_W < 560 ? 160 : 110) + 42 * (e.size ?? 1);
     if (e.dash !== undefined) {
       // charge: 0.9 s warning line, dive at the marked lane, climb back to the nest
       e.dash += dt;
@@ -2149,7 +2565,7 @@ function holdPlace(w: World, e: Enemy, dt: number) {
       }
       return;
     }
-    e.y += e.y < nest ? 52 * dt : 0;
+    e.y += e.y < nest ? (w.intro ? 110 : 52) * dt : 0;
     if (e.y > nest) e.y = nest + Math.sin(e.t * 1.4) * 4;
     const want = clamp(WORLD_W / 2 + Math.sin(e.t * 0.55) * Math.min(120, WORLD_W * 0.12), edgeOf("boss"), WORLD_W - edgeOf("boss"));
     // ease back after a charge instead of snapping across the screen
@@ -2191,8 +2607,10 @@ function holdPlace(w: World, e: Enemy, dt: number) {
     else e.y = nest + Math.sin(e.t * 1.1) * 6;
     if (Math.abs(e.vx) < 20) e.vx = e.ox < WORLD_W / 2 ? 70 : -70;
     e.x += e.vx * dt;
-    if (e.x < edgeOf(e.kind) || e.x > WORLD_W - edgeOf(e.kind)) e.vx *= -1;
-    contain(e);
+    // a mini-boss is wide: it turns round before it hangs off the screen
+    const m = e.role === "mini" ? Math.min(WORLD_W * 0.42, e.r + 26) : edgeOf(e.kind);
+    if ((e.x < m && e.vx < 0) || (e.x > WORLD_W - m && e.vx > 0)) e.vx *= -1;
+    e.x = clamp(e.x, m, WORLD_W - m);
     return;
   }
   if (e.motion === "spiral") {
@@ -2277,6 +2695,8 @@ function stepHazards(w: World, dt: number) {
         bank(w, 5, h.x, h.y, true);
         h.kind = "dead";
       }
+    } else if (h.kind === "pipe") {
+      stepPipe(w, h, dt);
     } else if (h.kind === "goo") {
       if (h.y > WORLD_H + 20) h.y = -30;
       for (const p of living(w)) {
@@ -2443,7 +2863,8 @@ function drivePilot(w: World, p: Player, fly: Fly, dt: number) {
     p.speedUp = Math.max(0, -p.my);
   }
   p.x = clamp(p.x, 22, WORLD_W - 22);
-  p.y = clamp(p.y, laneTop(), WORLD_H - 36);
+  if (w.duel) p.y = p === w.wing ? clamp(p.y, 40, WORLD_H * 0.47) : clamp(p.y, WORLD_H * 0.53, WORLD_H - 36);
+  else p.y = clamp(p.y, laneTop(), WORLD_H - 36);
   p.bank += (bankTarget - p.bank) * (1 - Math.exp(-12 * dt));
   p.fireCd -= dt;
   p.buddy = Math.max(0, p.buddy - dt);
@@ -2514,6 +2935,23 @@ export function step(w: World, dt: number, input: InputState) {
     if (w.wing) w.wing.speedUp = 0;
     return;
   }
+  if (w.duel) {
+    stepDuel(w, dt, input);
+    return;
+  }
+  if (w.intro) {
+    w.intro.t -= dt;
+    if (w.intro.t <= 0) w.intro = null;
+  }
+  if (w.superWait) {
+    w.superWait.t -= dt;
+    if (w.superWait.t <= 0) {
+      // the partner did not answer: an ordinary bomb, if there is one
+      const who = w.superWait.who === 1 && w.wing ? w.wing : w.player;
+      w.superWait = null;
+      blast(w, who.alive ? who : w.player.alive ? w.player : (w.wing ?? w.player));
+    }
+  }
 
   drivePilot(
     w,
@@ -2553,8 +2991,11 @@ export function step(w: World, dt: number, input: InputState) {
     );
   }
 
+  // Both pilots hitting bomb in the very same frame is exactly what the Super Flush asks
+  // for, so both presses count then; otherwise one frame never spends two bombs.
+  const charged = !!w.wing && w.wing.alive && w.player.alive && w.team[0] >= 100 && w.team[1] >= 100;
   if (input.bomb) detonate(w, w.player);
-  else if (input.wingBomb && w.wing) detonate(w, w.wing);
+  if (input.wingBomb && w.wing && (charged || !input.bomb)) detonate(w, w.wing);
   if (w.wing) teamwork(w, dt);
   stepHazards(w, dt);
 
@@ -2586,10 +3027,13 @@ export function step(w: World, dt: number, input: InputState) {
     moveEnemy(w, e, dt);
     if (e.kind === "boss") {
       e.fire -= dt;
-      if (e.fire <= 0 && w.freeze <= 0) {
+      if (e.fire <= 0 && w.freeze <= 0 && !w.intro) {
         runBoss(w, e);
         e.fire = Math.max(0.7, 1.5 - e.mark * 0.2);
       }
+    } else if (e.role === "mini") {
+      e.fire -= dt;
+      if (e.fire <= 0 && w.freeze <= 0 && !w.intro && e.y > 30) runMini(w, e);
     } else {
       if (e.fire > 0) e.fire = Math.max(0, e.fire - dt);
       if (e.warn > 0) {
@@ -2668,6 +3112,12 @@ export function step(w: World, dt: number, input: InputState) {
       if (e.hp <= 0) continue;
       if (b.hit && b.hit.includes(e)) continue;
       if (Math.hypot(b.x - e.x, b.y - e.y) < e.r + b.r) {
+        if (w.intro && (e.kind === "boss" || e.role === "mini")) {
+          // still making its entrance: nothing sticks until the name card is gone
+          b.life = 0;
+          sparkHit(w, e, b.x, b.y);
+          break;
+        }
         if (b.style === STYLE.bathBomb) {
           b.life = 0;
           foamBurst(w, b.x, b.y, 96, b.dmg, b.owner ?? 0, STYLE.bathBomb);
@@ -2693,7 +3143,7 @@ export function step(w: World, dt: number, input: InputState) {
           break;
         }
         if (e.role === "ghost" && Math.sin(e.t * 2.4) < 0) continue;
-        if (e.role !== "honey" && e.kind !== "boss" && w.enemies.some((h) => h.role === "honey" && h.hp > 0 && Math.hypot(h.x - e.x, h.y - e.y) < HONEY_RING * (h.size ?? 1))) {
+        if (e.role !== "honey" && e.kind !== "boss" && e.role !== "mini" && w.enemies.some((h) => h.role === "honey" && h.hp > 0 && Math.hypot(h.x - e.x, h.y - e.y) < HONEY_RING * (h.size ?? 1))) {
           // shielded: the shot slips through, so the turret behind can still be reached
           if (e.flash <= 0) {
             ring(w, e.x, e.y, "#e2b84a", 0.2, e.r, 1.4);
@@ -2703,6 +3153,8 @@ export function step(w: World, dt: number, input: InputState) {
         }
         e.hp -= b.style === STYLE.mist ? b.dmg * mistPower(b.life) : b.dmg;
         e.by = b.owner ?? 0;
+        // no kills to count in a boss fight: there the hits charge the Super Flush
+        if (e.kind === "boss") addTeam(w, e.by, b.dmg * 0.05);
         sparkHit(w, e, b.x, b.y);
         if ((b.splash ?? 0) > 0) {
           for (const other of w.enemies) {
@@ -2795,7 +3247,7 @@ export function step(w: World, dt: number, input: InputState) {
             }
             continue;
           }
-          if (e.kind !== "boss") e.hp = 0;
+          if (e.kind !== "boss" && e.role !== "mini") e.hp = 0;
           hurtPlayer(w, ship);
         }
       }
@@ -2808,7 +3260,7 @@ export function step(w: World, dt: number, input: InputState) {
     return;
   }
 
-  if (!w.bossUp && w.spawns.length === 0 && w.enemies.length === 0 && w.level > 0) {
+  if (!w.bossUp && w.spawns.length === 0 && w.enemies.length === 0 && w.level > 0 && !w.hazards.some((h) => h.kind === "pipe")) {
     if (!w.clearing) {
       w.clearing = true;
       w.lootT = 0;
@@ -2855,7 +3307,14 @@ function finishLevel(w: World) {
   else w.meta.dollars += bonus;
   w.clearCash = w.arcade ? Math.round(bonus * 0.5) : bonus;
   if (w.perfect) w.score += 400;
-  const earned = starsOf(w.perfect, noBomb, w.slain, Math.max(1, w.born), fast, boss);
+  // set pieces are not about shooting everything: no bombs is enough for their third star
+  const counted = w.kind === "waves" || w.kind === "bonus" || w.kind === "boss";
+  const earned = starsOf(w.perfect, noBomb, counted ? w.slain : 1, counted ? Math.max(1, w.born) : 1, fast, boss);
+  if (w.kind === "storm" && w.perfect && !w.arcade) note(w, "stormClean");
+  if (w.wing && !w.arcade) {
+    if (w.tally[0] > w.tally[1]) w.series[0] += 1;
+    else if (w.tally[1] > w.tally[0]) w.series[1] += 1;
+  }
   w.starShow = `${"★".repeat(earned)}${"☆".repeat(Math.max(0, 3 - earned))}`;
   if (!w.arcade) w.meta.stars[w.level] = Math.max(w.meta.stars[w.level] ?? 0, earned);
   grantStars(w.meta);
@@ -2979,4 +3438,295 @@ export function skipBridge(w: World) {
 
 export function multiplierOf(w: World) {
   return 1 + Math.min(w.chain, 30) * 0.12;
+}
+
+
+export const DUEL_HP = 100;
+export const DUEL_WINS = 3;
+/** A round that is still going after this many seconds hits twice as hard; after twice as long, four times. */
+export const DUEL_SUDDEN = 40;
+/** The strongest a gun gets in a duel: rounds should be won by flying, not by the luckiest gift. */
+const DUEL_RANK = 4;
+
+/** Two pilots, one screen, against each other. Nothing here touches the campaign or the save. */
+export function startDuel(w: World) {
+  resetField(w);
+  w.arcade = false;
+  w.daily = false;
+  w.pinned = null;
+  w.coop = true;
+  w.kind = "waves";
+  w.hazards = [];
+  w.score = 0;
+  // a room for the backdrop; the campaign's own level is put back when the duel ends
+  w.level = 1 + 10 * Math.floor(Math.random() * 10);
+  w.wave = w.level;
+  w.rng = mulberry32((Math.random() * 1e9) | 0);
+  w.player = freshPlayer();
+  w.wing = freshPlayer();
+  w.duel = { hp: [DUEL_HP, DUEL_HP], wins: [0, 0], round: 0, state: "ready", wait: 0, giftT: 3, last: -1, taunt: "", clock: 0 };
+  duelRound(w);
+  w.mode = "play";
+}
+
+/** Leaves the duel and puts the campaign back exactly as it was. */
+export function endDuel(w: World) {
+  w.duel = null;
+  w.wing = null;
+  resetField(w);
+  w.player = freshPlayer();
+  w.coop = Boolean(w.snap?.coop);
+  w.level = clamp(w.meta.level, 1, LEVELS);
+  w.wave = w.level;
+  w.score = 0;
+  w.mode = "menu";
+  persist(w, w.snap);
+}
+
+function duelRound(w: World) {
+  const d = w.duel;
+  const b = w.wing;
+  if (!d || !b) return;
+  const a = w.player;
+  d.round += 1;
+  d.hp = [DUEL_HP, DUEL_HP];
+  d.state = "ready";
+  d.wait = 1.8;
+  d.giftT = 2.5;
+  d.clock = 0;
+  w.bullets = [];
+  w.pickups = [];
+  [a, b].forEach((p, i) => {
+    Object.assign(p, freshPlayer());
+    p.weapon = 2;
+    p.family = "bubble";
+    // whoever lost the last round starts this one behind a shield
+    p.shield = d.last >= 0 && d.last !== i;
+    p.inv = 0;
+    p.fireCd = 0.3;
+    p.x = WORLD_W / 2;
+    p.y = i === 0 ? WORLD_H - 110 : 110;
+  });
+  w.banner = `ROUND ${d.round}`;
+  w.bannerT = 1.5;
+  w.cues.push("wave");
+}
+
+function duelGift(w: World, pk: Pickup, i: number) {
+  const d = w.duel;
+  const b = w.wing;
+  if (!d || !b) return;
+  const p = i === 0 ? w.player : b;
+  const foe = i === 0 ? b : w.player;
+  const say = (text: string) => float(w, p.x, p.y + (i === 0 ? -30 : 34), text, true);
+  if (pk.kind === "W") {
+    const family = FAMILIES[(((pk.value || 0) % FAMILIES.length) + FAMILIES.length) % FAMILIES.length] ?? "bubble";
+    if (family !== p.family) p.family = family;
+    else if (p.weapon < DUEL_RANK) p.weapon += 1;
+    else p.feed = 5;
+    say(gunName(p.weapon, p.family));
+    cheer(w, p.x, p.y, familyColor(family));
+    w.cues.push("pickup");
+  } else if (pk.kind === "S") {
+    p.shield = true;
+    say("SHIELD BUBBLE");
+    cheer(w, p.x, p.y, "#7eb6d6");
+    w.cues.push("pickup");
+  } else if (pk.kind === "L") {
+    d.hp[i] = Math.min(DUEL_HP, d.hp[i] + 25);
+    say("PATCHED UP +25");
+    cheer(w, p.x, p.y, "#f4e7cf");
+    w.cues.push("pickup");
+  } else if (pk.kind === "C") {
+    p.rush = 7;
+    say("COFFEE – FIRE RATE UP");
+    cheer(w, p.x, p.y, "#c9a24a");
+    w.cues.push("drive");
+  } else if (pk.kind === "T") {
+    p.star = 3;
+    p.inv = Math.max(p.inv, 3);
+    say("STAR – CAN'T TOUCH THIS");
+    cheer(w, p.x, p.y, "#f4f1ea");
+    w.cues.push("shield");
+  } else {
+    // air freshener: wipes the other pilot's shots off the screen and stings them
+    w.bullets = w.bullets.filter((sh) => (sh.owner ?? 0) === i);
+    say("AIR FRESHENER");
+    ring(w, p.x, p.y, "#e7eaee", 0.48, 12, 2);
+    w.flash = 0.2;
+    addTrauma(w, 0.5);
+    w.cues.push("bomb");
+    if (foe.alive && foe.inv <= 0) {
+      if (foe.shield) foe.shield = false;
+      else {
+        d.hp[1 - i] = Math.max(0, d.hp[1 - i] - 15);
+        if (d.hp[1 - i] <= 0) duelKo(w, 1 - i);
+      }
+    }
+  }
+}
+
+function duelKo(w: World, loser: number) {
+  const d = w.duel;
+  const b = w.wing;
+  if (!d || !b || d.state !== "fight") return;
+  const winner = 1 - loser;
+  const p = loser === 0 ? w.player : b;
+  d.wins[winner] += 1;
+  d.last = winner;
+  d.state = "ko";
+  d.wait = 2.2;
+  p.alive = false;
+  burst(w, p.x, p.y, loser === 0 ? "#ff6b4a" : "#35d0c0", 22, 240, true);
+  burst(w, p.x, p.y, "#f7fbff", 12, 220, false);
+  ring(w, p.x, p.y, "#f4fbff", 0.42, 14, 2.4);
+  splat(w, p.x, p.y, 54);
+  addTrauma(w, 0.85);
+  w.hitstop = 0.1;
+  w.flash = 0.25;
+  w.cues.push("fart");
+  w.bullets = [];
+  w.pickups = [];
+  const final = d.wins[winner] >= DUEL_WINS;
+  if (final) d.taunt = DUEL_TAUNTS[Math.floor(w.rng() * DUEL_TAUNTS.length)] ?? DUEL_TAUNTS[0];
+  w.banner = final ? `PILOT ${winner + 1} WINS THE DUEL` : `PILOT ${winner + 1} TAKES ROUND ${d.round}`;
+  w.bannerT = 2.1;
+}
+
+function stepDuel(w: World, dt: number, input: InputState) {
+  const d = w.duel;
+  const p2 = w.wing;
+  if (!d || !p2) return;
+  const p1 = w.player;
+  const live = d.state === "fight";
+  drivePilot(
+    w,
+    p1,
+    { left: input.left, right: input.right, up: input.up, down: input.down, focus: input.focus, fire: live && input.fire, alt: false, pointer: null, stick: input.stick ?? null, drag: null },
+    dt,
+  );
+  drivePilot(
+    w,
+    p2,
+    {
+      left: !!input.wingLeft,
+      right: !!input.wingRight,
+      up: !!input.wingUp,
+      down: !!input.wingDown,
+      focus: !!input.wingFocus,
+      fire: live && !!input.wingFire,
+      alt: false,
+      pointer: null,
+      stick: input.wingStick ?? null,
+      drag: null,
+    },
+    dt,
+  );
+  if (d.state === "ready") {
+    d.wait -= dt;
+    if (d.wait <= 0) {
+      d.state = "fight";
+      w.banner = "FLUSH!";
+      w.bannerT = 0.7;
+      w.cues.push("boss");
+    }
+  } else if (d.state === "ko") {
+    d.wait -= dt;
+    if (d.wait <= 0) {
+      if (Math.max(d.wins[0], d.wins[1]) >= DUEL_WINS) {
+        w.mode = "duelover";
+        w.bullets = [];
+        note(w, "duels");
+        persist(w, w.snap);
+        return;
+      }
+      duelRound(w);
+    }
+  }
+
+  // gifts drift along the middle line: flying up for one means flying up to the other pilot
+  if (live) {
+    const was = d.clock;
+    d.clock += dt;
+    if (was < DUEL_SUDDEN && d.clock >= DUEL_SUDDEN) {
+      w.banner = "SUDDEN DEATH – DOUBLE DAMAGE";
+      w.bannerT = 1.6;
+      w.cues.push("boss");
+    }
+    d.giftT -= dt;
+    if (d.giftT <= 0 && w.pickups.length < 2) {
+      d.giftT = 5 + w.rng() * 3;
+      const roll = w.rng();
+      // in sudden death nothing that drags the round out falls any more: guns, coffee and fresheners only
+      const sudden = d.clock >= DUEL_SUDDEN;
+      const kind: PickupKind = roll < 0.4 ? "W" : roll < 0.55 ? (sudden ? "W" : "S") : roll < 0.68 ? (sudden ? "B" : "L") : roll < 0.82 ? "C" : roll < 0.93 ? "B" : sudden ? "C" : "T";
+      const fromLeft = w.rng() < 0.5;
+      const hue = kind === "W" ? Math.floor(w.rng() * FAMILIES.length) : undefined;
+      w.pickups.push({ kind, x: fromLeft ? -30 : WORLD_W + 30, y: WORLD_H / 2, vx: (fromLeft ? 1 : -1) * (60 + w.rng() * 40), vy: 0, value: hue ?? 0, rest: w.rng() * 6, hue, age: 0 });
+    }
+  }
+  const kept: Pickup[] = [];
+  for (const pk of w.pickups) {
+    pk.age = (pk.age ?? 0) + dt;
+    pk.x += pk.vx * dt;
+    pk.y = WORLD_H / 2 + Math.sin(pk.age * 2.2 + pk.rest) * 24;
+    if (pk.x < -50 || pk.x > WORLD_W + 50) continue;
+    let taken = false;
+    if (live) {
+      for (const [p, i] of [
+        [p1, 0],
+        [p2, 1],
+      ] as const) {
+        if (p.alive && Math.hypot(p.x - pk.x, p.y - pk.y) < 38) {
+          duelGift(w, pk, i);
+          taken = true;
+          break;
+        }
+      }
+    }
+    if (!taken) kept.push(pk);
+  }
+  // a gift can end the round (the freshener stings), and the round clears the field
+  if (d.state !== "ko") w.pickups = kept;
+
+  for (const sh of w.bullets) {
+    sh.age = (sh.age ?? 0) + dt;
+    sh.x += sh.vx * dt;
+    sh.y += sh.vy * dt;
+    sh.life -= dt;
+  }
+  if (d.state === "fight") {
+    for (const sh of w.bullets) {
+      if (sh.life <= 0 || sh.grazed) continue;
+      const t = (sh.owner ?? 0) === 0 ? 1 : 0;
+      const p = t === 0 ? p1 : p2;
+      if (!p.alive) continue;
+      if (Math.hypot(sh.x - p.x, sh.y - p.y) > 15 + sh.r * 0.7) continue;
+      // one shot, one hit, even for the ones that fly on through
+      sh.grazed = true;
+      if ((sh.pierce ?? 0) <= 0) sh.life = 0;
+      if (p.inv > 0) continue;
+      if (p.shield) {
+        p.shield = false;
+        p.inv = 0.35;
+        burst(w, p.x, p.y, "#f4f1ea", 12, 150, false);
+        ring(w, p.x, p.y, "#f4f1ea", 0.28, 8, 1.5);
+        w.cues.push("shield");
+        continue;
+      }
+      const press = d.clock >= DUEL_SUDDEN * 2 ? 4 : d.clock >= DUEL_SUDDEN ? 2 : 1;
+      const dmg = (sh.style === STYLE.mist ? sh.dmg * mistPower(sh.life) : sh.dmg) * press;
+      d.hp[t] = Math.max(0, d.hp[t] - dmg);
+      p.splat = 0.12;
+      burst(w, sh.x, sh.y, t === 0 ? "#ff6b4a" : "#35d0c0", 3, 150, false);
+      if (sh.style !== undefined && sh.style >= 10 && sh.style <= 15) puff(w, sh.x, sh.y, sh.style, 22);
+      addTrauma(w, 0.04);
+      w.cues.push("hit");
+      if (d.hp[t] <= 0) {
+        duelKo(w, t);
+        break;
+      }
+    }
+  }
+  w.bullets = w.bullets.filter((sh) => sh.life > 0 && sh.x > -30 && sh.x < WORLD_W + 30 && sh.y > -50 && sh.y < WORLD_H + 50);
 }

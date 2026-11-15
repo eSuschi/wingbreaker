@@ -137,10 +137,165 @@ export class Sfx {
   }
 
   kill(big: boolean) {
-    this.noise(big ? 0.34 : 0.1, big ? 0.2 : 0.07, big ? 420 : 1100);
-    const f = (big ? 78 : 150) * (0.92 + Math.random() * 0.16);
-    this.tone(f, big ? 0.28 : 0.09, "sawtooth", big ? 0.055 : 0.028, big ? -50 : -80);
-    if (big) this.tone(220, 0.12, "triangle", 0.03, 80);
+    if (big) {
+      this.noise(0.34, 0.2, 420);
+      this.tone(78 * (0.92 + Math.random() * 0.16), 0.28, "sawtooth", 0.055, -50);
+      this.tone(220, 0.12, "triangle", 0.03, 80);
+      return;
+    }
+    // small fry go three different ways, so a line of them is not one sound ten times
+    const pick = Math.floor(Math.random() * 3);
+    const j = 0.9 + Math.random() * 0.2;
+    if (pick === 0) {
+      this.noise(0.1, 0.07, 1100);
+      this.tone(150 * j, 0.09, "sawtooth", 0.028, -80);
+    } else if (pick === 1) {
+      // plop
+      this.tone(330 * j, 0.1, "sine", 0.06, -230);
+      this.noise(0.04, 0.03, 900);
+    } else {
+      // squelch
+      this.noise(0.12, 0.08, 520);
+      this.tone(190 * j, 0.11, "triangle", 0.035, -110);
+    }
+  }
+
+  /** Storm poop bursting: wet and short. */
+  splat() {
+    const j = 0.88 + Math.random() * 0.24;
+    this.noise(0.13, 0.1, 640);
+    this.tone(240 * j, 0.12, "sine", 0.05, -170);
+  }
+
+  /** A heavy going down. It is exactly what it sounds like. */
+  fart() {
+    if (this.muted || !this.ctx) return;
+    const ctx = this.ctx;
+    const t = ctx.currentTime;
+    const dur = 0.42 + Math.random() * 0.16;
+    const osc = ctx.createOscillator();
+    osc.type = "sawtooth";
+    const f = 92 + Math.random() * 26;
+    osc.frequency.setValueAtTime(f, t);
+    osc.frequency.linearRampToValueAtTime(f * 1.25, t + dur * 0.25);
+    osc.frequency.exponentialRampToValueAtTime(f * 0.5, t + dur);
+    // the flutter is what makes it a raspberry and not a note
+    const lfo = ctx.createOscillator();
+    lfo.type = "square";
+    lfo.frequency.setValueAtTime(34, t);
+    lfo.frequency.linearRampToValueAtTime(19, t + dur);
+    const depth = ctx.createGain();
+    depth.gain.value = 0.5;
+    const trem = ctx.createGain();
+    trem.gain.value = 0.55;
+    lfo.connect(depth);
+    depth.connect(trem.gain);
+    const filter = ctx.createBiquadFilter();
+    filter.type = "lowpass";
+    filter.frequency.value = 520;
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(0.2 * this.volume + 0.0001, t + 0.03);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    osc.connect(filter);
+    filter.connect(trem);
+    trem.connect(g);
+    g.connect(ctx.destination);
+    osc.start(t);
+    lfo.start(t);
+    osc.stop(t + dur + 0.03);
+    lfo.stop(t + dur + 0.03);
+    this.noise(0.2, 0.09, 380);
+  }
+
+  /** The big flush: water going round and down, with a gurgle at the end. */
+  flush() {
+    if (this.muted || !this.ctx) return;
+    const ctx = this.ctx;
+    const t = ctx.currentTime;
+    const dur = 1.25;
+    if (!this.noiseBuf) this.noise(0.01, 0.0001, 900);
+    if (this.noiseBuf) {
+      const src = ctx.createBufferSource();
+      src.buffer = this.noiseBuf;
+      src.loop = true;
+      const band = ctx.createBiquadFilter();
+      band.type = "bandpass";
+      band.Q.value = 1.1;
+      band.frequency.setValueAtTime(2200, t);
+      band.frequency.exponentialRampToValueAtTime(260, t + dur);
+      const swirl = ctx.createOscillator();
+      swirl.frequency.setValueAtTime(5, t);
+      swirl.frequency.linearRampToValueAtTime(13, t + dur);
+      const depth = ctx.createGain();
+      depth.gain.value = 0.4;
+      const trem = ctx.createGain();
+      trem.gain.value = 0.6;
+      swirl.connect(depth);
+      depth.connect(trem.gain);
+      const g = ctx.createGain();
+      g.gain.setValueAtTime(0.0001, t);
+      g.gain.exponentialRampToValueAtTime(0.34 * this.volume + 0.0001, t + 0.08);
+      g.gain.setValueAtTime(0.34 * this.volume + 0.0001, t + dur * 0.55);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+      src.connect(band);
+      band.connect(trem);
+      trem.connect(g);
+      g.connect(ctx.destination);
+      src.start(t);
+      swirl.start(t);
+      src.stop(t + dur + 0.05);
+      swirl.stop(t + dur + 0.05);
+    }
+    this.tone(170, 0.9, "sine", 0.06, -120);
+    // the last gulp
+    const osc = ctx.createOscillator();
+    const g2 = ctx.createGain();
+    osc.type = "sine";
+    osc.frequency.setValueAtTime(120, t + dur - 0.2);
+    osc.frequency.exponentialRampToValueAtTime(48, t + dur + 0.12);
+    g2.gain.setValueAtTime(0.0001, t + dur - 0.2);
+    g2.gain.exponentialRampToValueAtTime(0.11 * this.volume + 0.0001, t + dur - 0.12);
+    g2.gain.exponentialRampToValueAtTime(0.0001, t + dur + 0.14);
+    osc.connect(g2);
+    g2.connect(ctx.destination);
+    osc.start(t + dur - 0.2);
+    osc.stop(t + dur + 0.2);
+  }
+
+  /** A pipe bursting at the valve: a clank and a hiss. */
+  valve() {
+    this.tone(640, 0.07, "square", 0.04, -180);
+    this.tone(960, 0.11, "triangle", 0.03, -260);
+    this.noise(0.3, 0.12, 2600);
+    this.tone(84, 0.24, "sawtooth", 0.05, -30);
+  }
+
+  /** A few notes going up: something is charged and waiting. */
+  ready() {
+    if (this.muted || !this.ctx) return;
+    const t = this.ctx.currentTime;
+    [392, 523, 659, 784].forEach((f, i) => {
+      if (!this.ctx) return;
+      const osc = this.ctx.createOscillator();
+      const g = this.ctx.createGain();
+      osc.type = "triangle";
+      osc.frequency.setValueAtTime(f, t + i * 0.07);
+      g.gain.setValueAtTime(0.045 * this.volume + 0.0001, t + i * 0.07);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + i * 0.07 + 0.16);
+      osc.connect(g);
+      g.connect(this.ctx.destination);
+      osc.start(t + i * 0.07);
+      osc.stop(t + i * 0.07 + 0.18);
+    });
+  }
+
+  /** The name card of a boss sliding in: one low hit. */
+  card() {
+    this.noise(0.5, 0.16, 240);
+    this.tone(110, 0.55, "sawtooth", 0.05, -40);
+    this.tone(165, 0.45, "triangle", 0.04, -30);
+    this.tone(55, 0.6, "sine", 0.08, -10);
   }
 
   armor() {
