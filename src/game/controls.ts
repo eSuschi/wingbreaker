@@ -6,13 +6,15 @@ export type Action =
   | "p1Fire"
   | "p1Bomb"
   | "p1Focus"
+  | "p1Alt"
   | "p2Left"
   | "p2Right"
   | "p2Up"
   | "p2Down"
   | "p2Fire"
   | "p2Bomb"
-  | "p2Focus";
+  | "p2Focus"
+  | "p2Alt";
 
 export const ACTIONS: { id: Action; label: string; group: "Pilot" | "Wing" }[] = [
   { id: "p1Left", label: "Move left", group: "Pilot" },
@@ -22,6 +24,7 @@ export const ACTIONS: { id: Action; label: string; group: "Pilot" | "Wing" }[] =
   { id: "p1Fire", label: "Fire", group: "Pilot" },
   { id: "p1Bomb", label: "Bomb", group: "Pilot" },
   { id: "p1Focus", label: "Focus", group: "Pilot" },
+  { id: "p1Alt", label: "Second weapon", group: "Pilot" },
   { id: "p2Left", label: "Move left", group: "Wing" },
   { id: "p2Right", label: "Move right", group: "Wing" },
   { id: "p2Up", label: "Move up", group: "Wing" },
@@ -29,6 +32,7 @@ export const ACTIONS: { id: Action; label: string; group: "Pilot" | "Wing" }[] =
   { id: "p2Fire", label: "Fire", group: "Wing" },
   { id: "p2Bomb", label: "Bomb", group: "Wing" },
   { id: "p2Focus", label: "Focus", group: "Wing" },
+  { id: "p2Alt", label: "Second weapon", group: "Wing" },
 ];
 
 export type Binds = Record<Action, string[]>;
@@ -41,6 +45,7 @@ export const DEFAULT_BINDS: Binds = {
   p1Fire: ["KeyZ", "KeyJ", "ControlLeft"],
   p1Bomb: ["Space", "KeyX"],
   p1Focus: ["ShiftLeft"],
+  p1Alt: ["KeyC", "KeyE"],
   p2Left: ["ArrowLeft"],
   p2Right: ["ArrowRight"],
   p2Up: ["ArrowUp"],
@@ -48,6 +53,7 @@ export const DEFAULT_BINDS: Binds = {
   p2Fire: ["KeyK"],
   p2Bomb: ["KeyL"],
   p2Focus: ["ShiftRight"],
+  p2Alt: ["KeyO"],
 };
 
 const KEY = "wingbreaker.binds.v1";

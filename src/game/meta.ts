@@ -1,11 +1,25 @@
-import { type GunFamily, familyName } from "./v3";
+import { type GunFamily, familyFrom, familyName } from "./v3";
 
 export const LEVELS = 100;
 export const SAVE_V2 = "wingbreaker.save.v2";
 export const SAVE_KEY = "wingbreaker.save.v3";
 const LEGACY_BEST = "wingbreaker.best.v1";
 
-export type SkinId = "steel" | "ember" | "navy" | "graphite" | "bone" | "duck" | "toaster" | "tub" | "toilet" | "throne";
+export type SkinId =
+  | "steel"
+  | "bone"
+  | "ember"
+  | "navy"
+  | "graphite"
+  | "twin"
+  | "crescent"
+  | "olive"
+  | "duck"
+  | "toaster"
+  | "cart"
+  | "tub"
+  | "toilet"
+  | "throne";
 export type UpgradeId = "hull" | "magazine" | "capacitor" | "magnet" | "salvage" | "trigger" | "wings" | "luck" | "salvo" | "insurance" | "pockets";
 
 export type Upgrades = Record<UpgradeId, number>;
@@ -16,6 +30,8 @@ export type Campaign = {
   best: number;
   cleared: boolean;
   skin: SkinId;
+  /** the wingman's ship, when two fly */
+  skin2: SkinId;
   owned: SkinId[];
   upgrades: Upgrades;
   mute: boolean;
@@ -72,39 +88,77 @@ export type Chapter = {
 };
 
 export const CHAPTERS: Chapter[] = [
-  { name: "Rust Nebula", boss: "Comet Regent", hull: "#3a2a24", edge: "#c4a090", accent: "#c44536", flame: "#e07a3d", sky: "#140c10" },
-  { name: "Glass Drift", boss: "Ion Admiral", hull: "#243038", edge: "#9eb0b8", accent: "#7eb6d6", flame: "#6a8ea3", sky: "#0c1418" },
-  { name: "Dust Ring", boss: "Dune Maw", hull: "#3a3428", edge: "#cbbfa6", accent: "#c4a574", flame: "#c4a36a", sky: "#16130e" },
-  { name: "Blue Dwarf", boss: "Moon Eye", hull: "#1c2433", edge: "#8ea0b8", accent: "#8eb4d8", flame: "#4d6d88", sky: "#0a1020" },
-  { name: "Amber Belt", boss: "Ochre Whale", hull: "#3a3420", edge: "#d2c08a", accent: "#d2a84a", flame: "#c4923a", sky: "#141208" },
-  { name: "Spore Halo", boss: "Nimbus Queen", hull: "#2a3328", edge: "#a8b4a4", accent: "#8aa384", flame: "#6e8a62", sky: "#0e140f" },
-  { name: "Pale Rift", boss: "Bone Comet", hull: "#d9d3c8", edge: "#6e675f", accent: "#c44536", flame: "#efeae2", sky: "#121418" },
-  { name: "Copper Sun", boss: "Forge Squid", hull: "#3a2c24", edge: "#d09a72", accent: "#e07a3d", flame: "#a85a32", sky: "#140e0c" },
-  { name: "Storm Belt", boss: "Thunder Jelly", hull: "#2a3138", edge: "#b7c0c8", accent: "#9aa8b5", flame: "#6e7c88", sky: "#0c1016" },
-  { name: "Black Watch", boss: "Eclipse Idol", hull: "#16181c", edge: "#8e99a3", accent: "#e07a3d", flame: "#c44536", sky: "#07080c" },
+  { name: "Old Bathroom", boss: "Armored Cistern", hull: "#3a2a24", edge: "#c4a090", accent: "#c44536", flame: "#e07a3d", sky: "#140c10" },
+  { name: "Showers & Spa", boss: "Twin Cistern", hull: "#243038", edge: "#9eb0b8", accent: "#7eb6d6", flame: "#6a8ea3", sky: "#0c1418" },
+  { name: "Cleaning Closet", boss: "Robo-Vacuum Overlord", hull: "#3a3428", edge: "#cbbfa6", accent: "#c4a574", flame: "#c4a36a", sky: "#16130e" },
+  { name: "Night Trip", boss: "Under-the-Bed Monster", hull: "#1c2433", edge: "#8ea0b8", accent: "#8eb4d8", flame: "#4d6d88", sky: "#0a1020" },
+  { name: "The Pantry", boss: "Fridge Titan", hull: "#3a3420", edge: "#d2c08a", accent: "#d2a84a", flame: "#c4923a", sky: "#141208" },
+  { name: "The Sewer", boss: "Drain Hydra", hull: "#2a3328", edge: "#a8b4a4", accent: "#8aa384", flame: "#6e8a62", sky: "#0e140f" },
+  { name: "Bathroom Cabinet", boss: "Medicine Cabinet Mimic", hull: "#d9d3c8", edge: "#6e675f", accent: "#c44536", flame: "#efeae2", sky: "#121418" },
+  { name: "Hot Kitchen", boss: "Kitchen Squid", hull: "#3a2c24", edge: "#d09a72", accent: "#e07a3d", flame: "#a85a32", sky: "#140e0c" },
+  { name: "Public Restroom", boss: "Janitor Mech", hull: "#2a3138", edge: "#b7c0c8", accent: "#9aa8b5", flame: "#6e7c88", sky: "#0c1016" },
+  { name: "Throne Room", boss: "The Toilet King", hull: "#16181c", edge: "#8e99a3", accent: "#e07a3d", flame: "#c44536", sky: "#07080c" },
 ];
 
+/**
+ * A ship in the hangar. Every ship flies differently; the numbers are multipliers on the
+ * standard ship unless they say otherwise.
+ */
 export type SkinDef = {
   id: SkinId;
   name: string;
+  /** file under /art/s */
+  art: string;
+  /** 0 with no `stars`: free from the start. 0 with `stars`: a reward, not for sale. */
   price: number;
+  stars?: number;
+  /** what makes this ship different, in one line */
+  trait: string;
+  speed: number;
+  /** hitbox size */
+  hit: number;
+  /** time between volleys: lower fires faster */
+  rate: number;
+  dmg: number;
+  /** lives and bombs added to (or taken from) the kit */
+  lives: number;
+  bombs: number;
+  /** starts every level with a shield */
+  shield?: boolean;
+  /** pulls gifts in from far away */
+  magnet?: number;
+  /** kills charge the next bomb faster */
+  charge?: number;
+  /** ammo crates hold more */
+  ammo?: number;
+  /** everything earned is worth more */
+  cash?: number;
+  /** flies with a Brush Buddy from the start */
+  buddy?: boolean;
+  /** fallback colours while the picture loads */
   hull: string;
   edge: string;
   canopy: string;
   hot: string;
 };
 
+const PLAIN = { speed: 1, hit: 1, rate: 1, dmg: 1, lives: 0, bombs: 0 };
+
 export const SKINS: SkinDef[] = [
-  { id: "steel", name: "Steel", price: 0, hull: "#c9d0d7", edge: "#66727c", canopy: "#8ec4dc", hot: "#e7edf2" },
-  { id: "ember", name: "Ember", price: 640, hull: "#c46a3a", edge: "#7a3b22", canopy: "#f0c08a", hot: "#f4d2b0" },
-  { id: "navy", name: "Navy", price: 640, hull: "#8fb4cc", edge: "#1e3a52", canopy: "#d5e6f2", hot: "#e7f2f8" },
-  { id: "graphite", name: "Graphite", price: 480, hull: "#9aa1a8", edge: "#2a2e33", canopy: "#e07a3d", hot: "#d5dbe2" },
-  { id: "bone", name: "Bone", price: 980, hull: "#e6e1d6", edge: "#8a8175", canopy: "#c44536", hot: "#f4f1ea" },
-  { id: "duck", name: "Rubber Duck", price: 1800, hull: "#f2d24a", edge: "#c49214", canopy: "#fff3a8", hot: "#fff7c8" },
-  { id: "toaster", name: "Toaster", price: 2400, hull: "#d9dde2", edge: "#5c656e", canopy: "#e07a3d", hot: "#f4e7c2" },
-  { id: "tub", name: "Bathtub", price: 3200, hull: "#e7eef2", edge: "#7d8b96", canopy: "#9ed0ea", hot: "#f7fbff" },
-  { id: "toilet", name: "Flying Toilet", price: 4500, hull: "#f4f7f8", edge: "#8a9298", canopy: "#7eb6d6", hot: "#fff" },
-  { id: "throne", name: "Golden Throne", price: 0, hull: "#e2b84a", edge: "#8a6420", canopy: "#fff1b8", hot: "#ffe38a" },
+  { ...PLAIN, id: "steel", name: "Silver Needle", art: "ship_09_silver_needle", price: 0, trait: "The standard issue. No surprises, no excuses.", hull: "#c9d0d7", edge: "#66727c", canopy: "#8ec4dc", hot: "#e7edf2" },
+  { ...PLAIN, id: "bone", name: "Ivory Petrol", art: "ship_14_ivory_petrol", price: 0, trait: "Starts every level with a shield. A touch slower.", speed: 0.94, shield: true, hull: "#e6e1d6", edge: "#2f5a63", canopy: "#c9a24a", hot: "#f4f1ea" },
+  { ...PLAIN, id: "ember", name: "Burgundy Interceptor", art: "ship_13_burgundy_interceptor", price: 640, trait: "Fast, and hits 10% harder. One life less.", speed: 1.2, dmg: 1.1, lives: -1, hull: "#8a2f3d", edge: "#4a1820", canopy: "#f0c08a", hot: "#f4d2b0" },
+  { ...PLAIN, id: "navy", name: "Indigo Trident", art: "ship_15_indigo_trident", price: 640, trait: "Three barrels: fires 15% faster.", speed: 0.96, rate: 0.85, hull: "#3d4274", edge: "#1e2140", canopy: "#d5e6f2", hot: "#e7f2f8" },
+  { ...PLAIN, id: "graphite", name: "Titanium Delta", art: "ship_10_titanium_delta", price: 0, stars: 30, trait: "Hard to hit: its hitbox is a quarter smaller.", speed: 1.05, hit: 0.75, hull: "#9aa1a8", edge: "#2a2e33", canopy: "#e07a3d", hot: "#d5dbe2" },
+  { ...PLAIN, id: "twin", name: "Twin Boom", art: "ship_11_silver_twin_boom", price: 1200, trait: "Built like a bridge: one extra life. A bit slow.", speed: 0.9, lives: 1, hull: "#aeb6be", edge: "#4a525a", canopy: "#c9a24a", hot: "#e7edf2" },
+  { ...PLAIN, id: "crescent", name: "Ice Crescent", art: "ship_12_ice_crescent", price: 1500, trait: "Pulls gifts in from far away. One extra bomb.", bombs: 1, magnet: 4, hull: "#a9c4d8", edge: "#3a5468", canopy: "#c9a24a", hot: "#eaf4fb" },
+  { ...PLAIN, id: "olive", name: "Olive Crescent", art: "ship_16_olive_crescent", price: 1500, trait: "Kills charge the next bomb half as fast again.", charge: 1.5, hull: "#8a8a5c", edge: "#3e3e28", canopy: "#c9a24a", hot: "#e6e1d6" },
+  { ...PLAIN, id: "duck", name: "Rubber Duck", art: "rubber_duck", price: 1800, trait: "Quick on the water. Ammo crates hold one more.", speed: 1.1, ammo: 1, hull: "#f2d24a", edge: "#c49214", canopy: "#fff3a8", hot: "#fff7c8" },
+  { ...PLAIN, id: "toaster", name: "Toaster", art: "toaster", price: 2400, trait: "Hot shots: 15% more damage. Handles like a toaster.", speed: 0.88, dmg: 1.15, hull: "#d9dde2", edge: "#5c656e", canopy: "#e07a3d", hot: "#f4e7c2" },
+  { ...PLAIN, id: "cart", name: "Shopping Cart", art: "shopping_cart", price: 2800, trait: "Everything you earn is worth a quarter more.", cash: 1.25, hull: "#b9c0c6", edge: "#5c656e", canopy: "#c44536", hot: "#f4f1ea" },
+  { ...PLAIN, id: "tub", name: "Bathtub", art: "bathtub", price: 3200, trait: "Two extra lives. Big, slow and proud of it.", speed: 0.82, hit: 1.15, lives: 2, hull: "#e7eef2", edge: "#7d8b96", canopy: "#9ed0ea", hot: "#f7fbff" },
+  { ...PLAIN, id: "toilet", name: "Flying Toilet", art: "flying_toilet", price: 4500, trait: "Never flies alone: comes with its own Brush Buddy.", buddy: true, hull: "#f4f7f8", edge: "#8a9298", canopy: "#7eb6d6", hot: "#fff" },
+  { ...PLAIN, id: "throne", name: "Golden Throne", art: "golden_throne", price: 0, stars: 250, trait: "Royal: quicker, fires faster, hits harder.", speed: 1.05, rate: 0.9, dmg: 1.1, hull: "#e2b84a", edge: "#8a6420", canopy: "#fff1b8", hot: "#ffe38a" },
 ];
 
 export const UPGRADE_LIST: { id: UpgradeId; name: string; blurb: string; max: number; prices: number[] }[] = [
@@ -122,7 +176,7 @@ export const UPGRADE_LIST: { id: UpgradeId; name: string; blurb: string; max: nu
 ];
 
 export const QUIPS = [
-  "The moon pug filed a complaint. It will not be read.",
+  "The Toilet Empire filed a complaint. It will not be read.",
   "You caught the gift. The gift is now emotionally attached.",
   "That jellyfish had a briefcase and a pension.",
   "Clean sky. The barnacles will mention you in the minutes.",
@@ -134,7 +188,7 @@ export const QUIPS = [
   "The oyster knew what it did.",
   "You lived. The goldfish will write a report.",
   "Afterburner is just panic with a budget.",
-  "Nobody told the pigeon this was a boss fight.",
+  "Nobody told the sponge this was a boss fight.",
   "They brought snacks. You brought math.",
   "A high score is a personality. Unfortunately.",
   "The snail's shell is a problem for someone else now.",
@@ -144,7 +198,7 @@ export const QUIPS = [
   "They will not put this on the brochure.",
   "Somebody call a janitor. A big one.",
   "The sky is clean. Your conscience is your business.",
-  "Every critter out there just updated its will.",
+  "Every plunger out there just updated its will.",
   "You did it. The poop did not.",
   "Accounting confirms: that was a lot of explosions.",
   "A space goat watched the whole thing. Unimpressed.",
@@ -155,7 +209,7 @@ export const QUIPS = [
   "The galaxy thanks you. Quietly. Through clenched teeth.",
   "Somewhere, a toilet seat glints with pride.",
   "Your guns are warm. Your snacks are warmer.",
-  "The pigeons have filed a formal complaint.",
+  "The plumbers' union has filed a formal complaint.",
   "That was almost elegant. Almost.",
   "Nobody told the cows the war was on.",
   "You've cleared the sector. The smell remains.",
@@ -230,6 +284,7 @@ export function freshCampaign(): Campaign {
     best: 0,
     cleared: false,
     skin: "steel",
+    skin2: "bone",
     owned: ["steel"],
     upgrades: { hull: 0, magazine: 0, capacitor: 0, magnet: 0, salvage: 0, trigger: 0, wings: 0, luck: 0, salvo: 0, insurance: 0, pockets: 0 },
     mute: false,
@@ -239,8 +294,8 @@ export function freshCampaign(): Campaign {
     crew: "solo",
     music: 55,
     sfx: 80,
-    gun: "pulse",
-    guns: ["pulse"],
+    gun: "bubble",
+    guns: ["bubble"],
     stars: Array(LEVELS + 1).fill(0),
     seen: [],
     snacks: 0,
@@ -298,8 +353,11 @@ function sanitize(raw: Partial<Campaign> | null | undefined, legacyBest: number)
   const owned = Array.isArray(raw.owned)
     ? raw.owned.filter((id): id is SkinId => SKINS.some((s) => s.id === id))
     : [];
+  // the two free ships are everybody's
+  if (!owned.includes("bone")) owned.unshift("bone");
   if (!owned.includes("steel")) owned.unshift("steel");
   const skin = owned.includes(raw.skin as SkinId) ? (raw.skin as SkinId) : "steel";
+  const skin2 = owned.includes(raw.skin2 as SkinId) ? (raw.skin2 as SkinId) : skin === "bone" ? "steel" : "bone";
   const up = raw.upgrades ?? base.upgrades;
   return {
     dollars: clampInt(raw.dollars, 0, 9_999_999, 0),
@@ -307,6 +365,7 @@ function sanitize(raw: Partial<Campaign> | null | undefined, legacyBest: number)
     best: Math.max(clampInt(raw.best, 0, 99_999_999, 0), legacyBest),
     cleared: Boolean(raw.cleared),
     skin,
+    skin2,
     owned,
     upgrades: {
       hull: clampInt(up.hull, 0, 2, 0),
@@ -328,12 +387,14 @@ function sanitize(raw: Partial<Campaign> | null | undefined, legacyBest: number)
     crew: raw.crew === "coop" ? "coop" : "solo",
     music: clampInt(raw.music, 0, 100, 55),
     sfx: clampInt(raw.sfx, 0, 100, 80),
-    gun: raw.gun === "neutron" || raw.gun === "lance" ? raw.gun : "pulse",
+    gun: familyFrom(raw.gun) ?? "bubble",
     guns: (() => {
-      const list: GunFamily[] = Array.isArray(raw.guns)
-        ? raw.guns.filter((g): g is GunFamily => g === "pulse" || g === "neutron" || g === "lance")
-        : ["pulse"];
-      if (!list.includes("pulse")) list.unshift("pulse");
+      const list: GunFamily[] = [];
+      for (const g of Array.isArray(raw.guns) ? raw.guns : []) {
+        const f = familyFrom(g);
+        if (f && !list.includes(f)) list.push(f);
+      }
+      if (!list.includes("bubble")) list.unshift("bubble");
       return list;
     })(),
     stars: sanitizeStars(raw.stars),
@@ -364,10 +425,10 @@ function sanitizeRun(raw: RunSnap | null | undefined): RunSnap | null {
     feed: Math.max(0, Math.min(12, Number(raw.feed) || 0)),
     coop: Boolean(raw.coop),
     missiles: clampInt(raw.missiles, 0, 9, 0),
-    family: raw.family === "neutron" || raw.family === "lance" ? raw.family : "pulse",
+    family: familyFrom(raw.family) ?? "bubble",
     snacks: clampInt(raw.snacks, 0, 100000, 0),
     weapon2: raw.weapon2 == null ? undefined : clampInt(raw.weapon2, 1, 6, 1),
-    family2: raw.family2 === "neutron" || raw.family2 === "lance" || raw.family2 === "pulse" ? raw.family2 : undefined,
+    family2: familyFrom(raw.family2),
   };
 }
 
@@ -420,20 +481,22 @@ export function buyUpgrade(c: Campaign, id: UpgradeId): "ok" | "max" | "poor" {
   return "ok";
 }
 
-export function buySkin(c: Campaign, id: SkinId): "ok" | "owned" | "poor" {
+export function buySkin(c: Campaign, id: SkinId, seat: 0 | 1 = 0): "ok" | "owned" | "poor" {
   if (c.owned.includes(id)) return "owned";
   const def = skinDef(id);
   if (def.price <= 0) return "poor";
   if (c.dollars < def.price) return "poor";
   c.dollars -= def.price;
   c.owned.push(id);
-  c.skin = id;
+  equipSkin(c, id, seat);
   return "ok";
 }
 
-export function equipSkin(c: Campaign, id: SkinId) {
+/** Puts a pilot in a ship. Both pilots can fly the same model if they like. */
+export function equipSkin(c: Campaign, id: SkinId, seat: 0 | 1 = 0) {
   if (!c.owned.includes(id)) return false;
-  c.skin = id;
+  if (seat === 1) c.skin2 = id;
+  else c.skin = id;
   return true;
 }
 
@@ -444,9 +507,10 @@ export function luckMul(rank: number) {
 export function loadoutOf(c: Campaign) {
   const wings = Math.min(2, c.upgrades.wings);
   const cap = c.upgrades.capacitor > 0 ? 1 : 0;
+  const ship = skinDef(c.skin);
   return {
-    lives: 3 + c.upgrades.hull,
-    bombs: 2 + c.upgrades.magazine,
+    lives: Math.max(1, 3 + c.upgrades.hull + ship.lives),
+    bombs: 2 + c.upgrades.magazine + ship.bombs,
     weapon: Math.min(6, 1 + cap + wings),
     missiles: Math.min(6, (c.upgrades.salvo || 0) * 2),
     family: c.gun,
@@ -459,30 +523,33 @@ export function starTotal(c: Campaign) {
 
 export function grantStars(c: Campaign) {
   const n = starTotal(c);
-  if (n >= 30 && !c.owned.includes("graphite")) c.owned.push("graphite");
-  if ((n >= 250 || c.cleared) && !c.owned.includes("throne")) c.owned.push("throne");
+  for (const ship of SKINS) {
+    if (!ship.stars || c.owned.includes(ship.id)) continue;
+    if (n >= ship.stars || (ship.id === "throne" && c.cleared)) c.owned.push(ship.id);
+  }
 }
 
+/** What it costs to start every sortie with a gun other than the Bubble Blaster. */
+export const GUN_PRICE = 600;
+
 export function buyGun(c: Campaign, family: GunFamily): "ok" | "poor" {
-  if (family === "pulse" || c.guns.includes(family)) {
+  if (family === "bubble" || c.guns.includes(family)) {
     c.gun = family;
     return "ok";
   }
-  if (c.dollars < 600) return "poor";
-  c.dollars -= 600;
+  if (c.dollars < GUN_PRICE) return "poor";
+  c.dollars -= GUN_PRICE;
   c.guns.push(family);
   c.gun = family;
   return "ok";
 }
 
 export function equipGun(c: Campaign, family: GunFamily) {
-  if (family !== "pulse" && !c.guns.includes(family)) return false;
+  if (family !== "bubble" && !c.guns.includes(family)) return false;
   c.gun = family;
   return true;
 }
 
-export const GUNS = ["PULSE", "TWIN", "TRIO", "FAN", "NEUTRON", "LANCE"] as const;
-
-export function gunName(level: number, family: GunFamily = "pulse") {
+export function gunName(level: number, family: GunFamily = "bubble") {
   return familyName(family, Math.max(1, Math.min(6, Math.round(level) || 1)), false);
 }

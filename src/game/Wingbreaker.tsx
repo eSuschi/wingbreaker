@@ -2,8 +2,17 @@ import { useEffect, useRef, useState } from "react";
 import { DollarSign } from "lucide-react";
 import { Sfx } from "./audio";
 import { Music } from "./music";
-import { chapterOf, CHAPTERS, quipFor, SKINS, UPGRADE_LIST, starTotal, type SkinId, type UpgradeId } from "./meta";
-import { CREDITS, GUIDE, TIPS, daySeed, type GunFamily } from "./v3";
+import { chapterOf, CHAPTERS, GUN_PRICE, quipFor, SKINS, UPGRADE_LIST, starTotal, type SkinId, type UpgradeId } from "./meta";
+import { CREDITS, FAMILIES, GUIDE, TIPS, daySeed, familyBlurb, familyName, type GunFamily } from "./v3";
+
+const GIFT_ART: Record<GunFamily, string> = {
+  bubble: "bubble_blaster",
+  soap: "soap_cannon",
+  paste: "toothpaste_laser",
+  zap: "zap_brush",
+  flush: "flush_wave",
+  mist: "freshener_mist",
+};
 import { ACTIONS, codeLabel, DEFAULT_BINDS, loadBinds, saveBinds, type Action, type Binds } from "./controls";
 import { drawWorld } from "./render";
 import {
@@ -63,6 +72,7 @@ type Ui = {
   nextChapter: string;
   hasSave: boolean;
   skin: SkinId;
+  skin2: SkinId;
   owned: SkinId[];
   upgrades: Record<UpgradeId, number>;
   cleared: boolean;
@@ -110,6 +120,7 @@ function readUi(world: World, muted: boolean): Ui {
     nextChapter: chapterOf(world.meta.level).name,
     hasSave: world.snap !== null || world.meta.level > 1,
     skin: world.meta.skin,
+    skin2: world.meta.skin2,
     owned: world.meta.owned.slice(),
     upgrades: { ...world.meta.upgrades },
     cleared: world.meta.cleared,
@@ -190,10 +201,11 @@ export function Wingbreaker() {
     record: false,
     perfect: true,
     clearCash: 0,
-    chapter: "Rust Nebula",
-    nextChapter: "Rust Nebula",
+    chapter: "Old Bathroom",
+    nextChapter: "Old Bathroom",
     hasSave: false,
     skin: "steel",
+    skin2: "bone",
     owned: ["steel"],
     upgrades: { hull: 0, magazine: 0, capacitor: 0, magnet: 0, salvage: 0, trigger: 0, wings: 0, luck: 0, salvo: 0, insurance: 0, pockets: 0 },
     cleared: false,
@@ -209,8 +221,8 @@ export function Wingbreaker() {
     seen: [],
     starsGrid: [],
     ranks: [],
-    gun: "pulse",
-    guns: ["pulse"],
+    gun: "bubble",
+    guns: ["bubble"],
     arcadeStage: 0,
     dailyPlayed: false,
     coop: false,
@@ -223,6 +235,8 @@ export function Wingbreaker() {
     replay: false,
   });
   const [touch, setTouch] = useState(false);
+  // which pilot the hangar is choosing a ship for
+  const [seat, setSeat] = useState<0 | 1>(0);
   const [notice, setNotice] = useState("");
   const [armReset, setArmReset] = useState(false);
   const [pick, setPick] = useState(false);
@@ -232,6 +246,7 @@ export function Wingbreaker() {
   const [initials, setInitials] = useState("AAA");
   const [tip, setTip] = useState(TIPS[0]);
   const touchFireRef = useRef(false);
+  const coarseRef = useRef(false);
   const bindsRef = useRef(binds);
   const captureRef = useRef<Action | null>(null);
   const pickRef = useRef(false);
@@ -250,6 +265,7 @@ export function Wingbreaker() {
   useEffect(() => {
     const coarse = window.matchMedia("(pointer: coarse)").matches;
     setTouch(coarse);
+    coarseRef.current = coarse;
     setCoarsePointer(coarse);
     setReduceMotion(window.matchMedia("(prefers-reduced-motion: reduce)").matches);
     const canvas = canvasRef.current;
@@ -275,6 +291,17 @@ export function Wingbreaker() {
     let bombLatch = false;
     let wingBombLatch = false;
     let mouseFire = false;
+    let mouseAlt = false;
+    // touch steering: finger travel since the last game step, in world pixels
+    const DRAG_GAIN = 1.15;
+    let dragX = 0;
+    let dragY = 0;
+    const takeDrag = () => {
+      const d = { dx: dragX, dy: dragY };
+      dragX = 0;
+      dragY = 0;
+      return d;
+    };
     const pointer = { on: false, x: 0, y: 0, touch: false };
     const layout = { dpr: 1 };
 
@@ -309,8 +336,8 @@ export function Wingbreaker() {
 
     // Gamepads: one pad flies the pilot when alone and the wingman when two
     // fly (so keyboard + pad works); with two pads each pilot gets one.
-    type PadState = { left: boolean; right: boolean; up: boolean; down: boolean; fire: boolean; focus: boolean; bomb: boolean; start: boolean };
-    const idle: PadState = { left: false, right: false, up: false, down: false, fire: false, focus: false, bomb: false, start: false };
+    type PadState = { left: boolean; right: boolean; up: boolean; down: boolean; fire: boolean; focus: boolean; bomb: boolean; start: boolean; alt: boolean; ax: number; ay: number };
+    const idle: PadState = { left: false, right: false, up: false, down: false, fire: false, focus: false, bomb: false, start: false, alt: false, ax: 0, ay: 0 };
     const padLatch = [
       { bomb: false, start: false, fire: false },
       { bomb: false, start: false, fire: false },
@@ -330,10 +357,14 @@ export function Wingbreaker() {
       const startHeld = on(9);
       const fireHeld = on(0) || on(7);
       const state: PadState = {
-        left: ax < -0.35 || on(14),
-        right: ax > 0.35 || on(15),
-        up: ay < -0.35 || on(12),
-        down: ay > 0.35 || on(13),
+        // the d-pad is digital, the stick is passed on as it is so a light push is a slow slide
+        left: on(14),
+        right: on(15),
+        up: on(12),
+        down: on(13),
+        ax,
+        ay,
+        alt: on(3),
         fire: fireHeld,
         focus: on(4) || on(5) || on(6),
         bomb: bombHeld && !latch.bomb,
@@ -387,7 +418,13 @@ export function Wingbreaker() {
         focus: focus || pad1.focus,
         fire: mouseFire || touchFireRef.current || keyFire || auto,
         bomb: edge || pad1.bomb,
-        pointer: pointer.on && !keying && world.mode === "play" && world.player.alive ? { x: pointer.x, y: pointer.y - 78 } : null,
+        pointer: null,
+        drag: pointer.on && !keying && world.mode === "play" && world.player.alive ? takeDrag() : null,
+        stick: { x: pad1.ax, y: pad1.ay },
+        // desktop has a real second button; on touch it is left out, and the second weapon fires with the first
+        alt: coarseRef.current ? undefined : hit("p1Alt") || mouseAlt || pad1.alt,
+        wingStick: { x: pad2.ax, y: pad2.ay },
+        wingAlt: (world.coop && hit("p2Alt")) || pad2.alt,
         wingLeft: (world.coop && hit("p2Left")) || pad2.left,
         wingRight: (world.coop && hit("p2Right")) || pad2.right,
         wingUp: (world.coop && hit("p2Up")) || pad2.up,
@@ -581,23 +618,33 @@ export function Wingbreaker() {
       pointer.y = pt.y;
       pointer.touch = e.pointerType === "touch";
       pointer.on = pointer.touch;
+      dragX = 0;
+      dragY = 0;
       mouseFire = !pointer.touch && e.button === 0;
+      mouseAlt = !pointer.touch && e.button === 2;
       canvas.setPointerCapture(e.pointerId);
     };
     const onPointerMove = (e: PointerEvent) => {
       const pt = toWorld(e.clientX, e.clientY);
       if (e.pointerType === "touch") {
         if (!pointer.on) return;
+        // the ship moves as far as the finger does, wherever the finger is on the screen
+        dragX += (pt.x - pointer.x) * DRAG_GAIN;
+        dragY += (pt.y - pointer.y) * DRAG_GAIN;
         pointer.x = pt.x;
         pointer.y = pt.y;
         return;
       }
       mouseFire = (e.buttons & 1) === 1;
+      mouseAlt = (e.buttons & 2) === 2;
     };
     const onPointerUp = (e: PointerEvent) => {
       if (e.pointerType === "touch") pointer.on = false;
       mouseFire = false;
+      mouseAlt = false;
     };
+    const onContext = (e: Event) => e.preventDefault();
+    canvas.addEventListener("contextmenu", onContext);
     const onPointerLeave = (e: PointerEvent) => {
       if (e.pointerType === "touch") return;
       mouseFire = false;
@@ -730,6 +777,7 @@ export function Wingbreaker() {
       canvas.removeEventListener("pointerup", onPointerUp);
       canvas.removeEventListener("pointercancel", onPointerUp);
       canvas.removeEventListener("pointerleave", onPointerLeave);
+      canvas.removeEventListener("contextmenu", onContext);
       sfx.drone(false);
       music.stop();
       if (import.meta.env.DEV) delete window.__controlsTest;
@@ -800,7 +848,7 @@ export function Wingbreaker() {
                 <span>{ui.hasSave ? "CONTINUE" : "NEW GAME"}</span>
                 <span className="text-right text-xs leading-tight font-medium tracking-[0.14em]">
                   <span className="block">LEVEL {String(ui.hasSave ? ui.mission : 1).padStart(3, "0")}</span>
-                  <span className="block opacity-80">{(ui.hasSave ? ui.nextChapter : "Rust Nebula").toUpperCase()}</span>
+                  <span className="block opacity-80">{(ui.hasSave ? ui.nextChapter : "Old Bathroom").toUpperCase()}</span>
                 </span>
               </button>
               {ui.hasSave && (
@@ -833,7 +881,7 @@ export function Wingbreaker() {
                 <p className="mt-1.5 text-xs leading-relaxed text-muted">
                   {ui.crew === "coop"
                     ? "Pilot: WASD, Z fires, Space bombs. Wingman: arrows, K fires, L bombs. Or plug in gamepads. Revive a downed partner by flying over the wreck."
-                    : "Move · click or Z to shoot · Shift focus · Space bomb · P pause · F auto fire. A gamepad works too."}
+                    : "WASD move · Z or click shoot · C second weapon · Space bomb · Shift slow · P pause. A gamepad works too."}
                 </p>
               </div>
             )}
@@ -880,7 +928,7 @@ export function Wingbreaker() {
             <p className="font-display text-sm tracking-[0.28em] text-muted">NEW GAME</p>
             <h2 className="font-display text-4xl tracking-wide">START FROM LEVEL 1?</h2>
             <p className="text-sm text-muted">
-              You are on level {String(ui.mission).padStart(3, "0")}. A new game goes back to the first level. Your cash, upgrades, skins and stars stay.
+              You are on level {String(ui.mission).padStart(3, "0")}. A new game goes back to the first level. Your cash, upgrades, ships and stars stay.
             </p>
             <button
               type="button"
@@ -929,41 +977,74 @@ export function Wingbreaker() {
               );
             })}
             <p className="mt-3 font-display text-sm tracking-[0.22em] text-muted">STARTING GUN</p>
-            {(["pulse", "neutron", "lance"] as GunFamily[]).map((family) => {
-              const owned = family === "pulse" || ui.guns.includes(family);
+            <p className="text-xs text-muted">The gun you take off with. Gifts in the field can still swap it.</p>
+            {FAMILIES.map((family) => {
+              const owned = family === "bubble" || ui.guns.includes(family);
               const worn = ui.gun === family;
               return (
                 <button
                   key={family}
                   type="button"
                   className={row}
-                  disabled={!owned && ui.dollars < 600}
+                  disabled={!owned && ui.dollars < GUN_PRICE}
                   onClick={() => act((w) => purchaseGun(w, family))}
                 >
-                  <span>{family.toUpperCase()}</span>
-                  <span className="text-sm text-ember">{worn ? "EQUIPPED" : owned ? "EQUIP" : "$600"}</span>
+                  <span className="flex min-w-0 items-center gap-3">
+                    <img src={`/art/k/${GIFT_ART[family]}_gift.webp`} alt="" className="h-8 w-8 shrink-0 object-contain" />
+                    <span className="min-w-0">
+                      <span className="block leading-tight">{familyName(family, 1, false).replace(/ 1$/, "")}</span>
+                      <span className="block truncate text-xs leading-tight text-muted normal-case tracking-normal">{familyBlurb(family)}</span>
+                    </span>
+                  </span>
+                  <span className="shrink-0 text-sm text-ember">{worn ? "EQUIPPED" : owned ? "EQUIP" : `$${GUN_PRICE}`}</span>
                 </button>
               );
             })}
-            <p className="mt-3 font-display text-sm tracking-[0.22em] text-muted">SKINS</p>
-            <p className="text-xs text-muted">Each skin is a different hull, not a paint job.</p>
+            <p className="mt-3 font-display text-sm tracking-[0.22em] text-muted">HANGAR</p>
+            <p className="text-xs text-muted">Every ship flies differently. Pick one for each pilot.</p>
             <div className="grid grid-cols-2 gap-2">
+              {([0, 1] as const).map((n) => (
+                <button
+                  key={n}
+                  type="button"
+                  aria-pressed={seat === n}
+                  className={`flex h-10 items-center justify-center gap-2 border font-display text-sm tracking-[0.16em] ${
+                    seat === n ? "border-ember bg-ember/15 text-ember" : "border-line bg-bg/70 text-muted hover:text-ink"
+                  }`}
+                  onClick={() => setSeat(n)}
+                >
+                  <span className="inline-block h-2.5 w-2.5" style={{ background: n === 0 ? "#ff6b4a" : "#35d0c0" }} />
+                  {n === 0 ? "PILOT 1" : "PILOT 2"}
+                </button>
+              ))}
+            </div>
+            <div className="grid grid-cols-1 gap-2">
               {SKINS.map((skin) => {
                 const owned = ui.owned.includes(skin.id);
-                const worn = ui.skin === skin.id;
+                const worn = (seat === 0 ? ui.skin : ui.skin2) === skin.id;
+                const other = (seat === 0 ? ui.skin2 : ui.skin) === skin.id;
+                const locked = !owned && skin.price <= 0;
                 return (
                   <button
                     key={skin.id}
                     type="button"
-                    className={`${row} h-14 ${worn ? "border-ember" : ""}`}
-                    disabled={!owned && ui.dollars < skin.price}
-                    onClick={() => act((w) => (owned ? wearSkin(w, skin.id) : purchaseSkin(w, skin.id)))}
+                    className={`flex min-h-[76px] items-center gap-3 border bg-bg/70 px-3 py-2 text-left backdrop-blur-sm disabled:opacity-50 ${
+                      worn ? "border-ember" : "border-line hover:border-ink/50"
+                    }`}
+                    disabled={locked || (!owned && ui.dollars < skin.price)}
+                    onClick={() => act((w) => (owned ? wearSkin(w, skin.id, seat) : purchaseSkin(w, skin.id, seat)))}
                   >
-                    <span className="flex items-center gap-2">
-                      <span className="inline-block h-3 w-3 border border-line" style={{ background: skin.hull }} />
-                      {skin.name}
+                    <img src={`/art/s/${skin.art}.webp`} alt="" className="h-14 w-14 shrink-0 object-contain" />
+                    <span className="min-w-0 flex-1">
+                      <span className="flex items-baseline justify-between gap-2">
+                        <span className="truncate font-display text-base tracking-[0.1em]">{skin.name.toUpperCase()}</span>
+                        <span className="shrink-0 font-display text-sm text-ember">
+                          {worn ? "FLYING" : owned ? "FLY" : locked ? `${skin.stars}★` : `$${skin.price}`}
+                        </span>
+                      </span>
+                      <span className="block text-xs leading-snug text-muted">{skin.trait}</span>
+                      {other && <span className="block text-[11px] leading-snug text-cold">{seat === 0 ? "Pilot 2" : "Pilot 1"} flies this one</span>}
                     </span>
-                    <span className="text-sm text-ember">{worn ? "WORN" : owned ? "WEAR" : `$${skin.price}`}</span>
                   </button>
                 );
               })}
@@ -1074,7 +1155,7 @@ export function Wingbreaker() {
               <span>NEW RUN</span>
               <span className="text-sm text-ember">{armReset ? "REALLY" : "LEVEL 1"}</span>
             </button>
-            <p className="text-xs text-muted">A new run clears the level and the score. Cash, skins, and upgrades stay.</p>
+            <p className="text-xs text-muted">A new run clears the level and the score. Cash, ships and upgrades stay.</p>
             <button type="button" className={`${row} mt-2`} onClick={() => { setCapture(null); act((w) => closeOverlay(w)); }}>
               <span>BACK</span>
             </button>
@@ -1217,7 +1298,7 @@ export function Wingbreaker() {
             <p className="font-display text-sm tracking-[0.28em] text-muted">LEVEL 100</p>
             <h2 className="font-display text-4xl tracking-wide">WATCH BROKEN</h2>
             <p className="font-display text-3xl">{String(ui.score).padStart(6, "0")}</p>
-            <p className="text-sm text-muted">The black watch does not come back. The hangar stays.</p>
+            <p className="text-sm text-muted">The Toilet King does not come back. The hangar stays.</p>
             <div className="max-h-40 space-y-1 overflow-hidden text-xs italic text-cold">
               {CREDITS.map((line) => (
                 <p key={line}>{line}</p>
@@ -1284,12 +1365,23 @@ export function Wingbreaker() {
                     className={`${row} h-10 text-sm ${guideId === entry.id ? "border-ember" : ""} ${known ? "" : "opacity-40"}`}
                     onClick={() => known && setGuideId(entry.id)}
                   >
-                    <span>{known ? entry.name : "???"}</span>
+                    <span className="flex min-w-0 items-center gap-2">
+                      <img src={`/art/${entry.art}.webp`} alt="" className={`h-7 w-7 shrink-0 object-contain ${known ? "" : "brightness-0 opacity-60"}`} />
+                      <span className="truncate">{known ? entry.name : "???"}</span>
+                    </span>
                   </button>
                 );
               })}
             </div>
-            <p className="text-sm italic text-cold">{GUIDE.find((g) => g.id === guideId && ui.seen.includes(g.id))?.line ?? "Not logged yet."}</p>
+            {(() => {
+              const pick = GUIDE.find((g) => g.id === guideId && ui.seen.includes(g.id));
+              return (
+                <div className="flex min-h-[88px] items-center gap-4 border border-line bg-bg/70 px-4 py-3">
+                  {pick && <img src={`/art/${pick.art}.webp`} alt="" className="h-16 w-16 shrink-0 object-contain" />}
+                  <p className="text-sm italic text-cold">{pick?.line ?? "Not logged yet. Go and get shot at by it."}</p>
+                </div>
+              );
+            })()}
             <button type="button" className={row} onClick={() => act((w) => { w.mode = "options"; })}>
               <span>BACK</span>
             </button>

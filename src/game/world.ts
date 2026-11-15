@@ -1,6 +1,6 @@
+import { lookFor, lookName } from "./army";
 import {
   LEVELS,
-  FAUNA,
   buySkin,
   buyUpgrade,
   buyGun,
@@ -12,6 +12,7 @@ import {
   luckMul,
   gunName,
   salvageMul,
+  skinDef,
   writeFile,
   grantStars,
   starTotal,
@@ -26,6 +27,9 @@ import {
   HONEY_RING,
   DEATH,
   FAMILIES,
+  STYLE,
+  familyColor,
+  mistPower,
   LAST_WORDS,
   arcadeStage,
   bossScript,
@@ -56,7 +60,8 @@ export let WORLD_H = 720;
 export let VIEW = 1;
 
 export type Kind = "dart" | "wedge" | "cruiser" | "drone" | "boss";
-export type PickupKind = "W" | "S" | "B" | "M" | "$" | "D";
+/** W gun gift, S shield, B bomb, M second-weapon ammo, $ coin, D duck, L extra life, G magnet, Y brush buddy */
+export type PickupKind = "W" | "S" | "B" | "M" | "$" | "D" | "L" | "G" | "Y";
 export type Mode = "menu" | "shop" | "options" | "standby" | "play" | "pause" | "over" | "clear" | "victory" | "bridge" | "levels" | "guide" | "ranks" | "arcadeover";
 export type Motion = "rank" | "sine" | "swoop" | "pincer" | "hold" | "boss" | "spiral" | "zigzag" | "conga" | "rain" | "dive";
 export type Cue = "kill" | "big" | "hit" | "graze" | "pickup" | "hurt" | "shield" | "bomb" | "wave" | "boss" | "clean" | "drive" | "missile" | "plink";
@@ -85,7 +90,16 @@ export type Bullet = {
   hit?: Enemy[];
   /** which pilot fired it: 0 pilot, 1 wingman */
   owner?: number;
+  /** Zap Brush: jumps left */
+  chain?: number;
+  /** 0 small, 1 medium, 2 large: which drawing a player shot wears */
+  rank?: number;
 };
+
+/** A short-lived picture where a shot landed. */
+export type Puff = { x: number; y: number; life: number; max: number; style: number; size: number };
+/** A lightning jump between two critters. */
+export type Arc = { x1: number; y1: number; x2: number; y2: number; life: number };
 
 export type Enemy = {
   kind: Kind;
@@ -157,9 +171,18 @@ export type Player = {
   alive: boolean;
   speedUp: number;
   bank: number;
+  /** current flying speed, world pixels a second */
+  mx: number;
+  my: number;
   muzzle: number;
+  /** ammo for the second weapon */
   missiles: number;
   missileCd: number;
+  /** which second weapon the ammo is for: 0 plunger missile, 1 bath bomb, 2 paper roll */
+  sec: number;
+  /** seconds left on the Brush Buddy and the Magnet */
+  buddy: number;
+  magnet: number;
   family: GunFamily;
   splat: number;
   slow: number;
@@ -190,6 +213,8 @@ export type World = {
   parts: Particle[];
   floaters: Floater[];
   rings: Ring[];
+  puffs: Puff[];
+  arcs: Arc[];
   cues: Cue[];
   score: number;
   best: number;
@@ -254,6 +279,14 @@ export type InputState = {
   fire: boolean;
   bomb: boolean;
   pointer: { x: number; y: number } | null;
+  /** analog stick, -1..1 on each axis; overrides the direction keys when it is pushed */
+  stick?: { x: number; y: number } | null;
+  /** touch: how far the finger moved since the last step, in world pixels */
+  drag?: { dx: number; dy: number } | null;
+  /** second weapon button */
+  alt?: boolean;
+  wingStick?: { x: number; y: number } | null;
+  wingAlt?: boolean;
   wingLeft?: boolean;
   wingRight?: boolean;
   wingUp?: boolean;
@@ -274,6 +307,7 @@ type Spawn = {
   spin?: number;
   oy?: number;
   role?: string;
+  line?: number;
 };
 
 const BEST_KEY = "wingbreaker.best.v1";
@@ -403,6 +437,8 @@ export function createWorld(best = 0): World {
     parts: [],
     floaters: [],
     rings: [],
+    puffs: [],
+    arcs: [],
     cues: [],
     score: 0,
     best: file.campaign.best,
@@ -471,10 +507,15 @@ function freshPlayer(): Player {
     alive: true,
     speedUp: 0,
     bank: 0,
+    mx: 0,
+    my: 0,
     muzzle: 0,
     missiles: 0,
     missileCd: 0,
-    family: "pulse",
+    sec: 0,
+    buddy: 0,
+    magnet: 0,
+    family: "bubble",
     splat: 0,
     slow: 0,
     insured: false,
@@ -573,14 +614,14 @@ export function purchaseUpgrade(w: World, id: UpgradeId) {
   return result;
 }
 
-export function purchaseSkin(w: World, id: SkinId) {
-  const result = buySkin(w.meta, id);
+export function purchaseSkin(w: World, id: SkinId, seat: 0 | 1 = 0) {
+  const result = buySkin(w.meta, id, seat);
   if (result === "ok") persist(w, w.snap);
   return result;
 }
 
-export function wearSkin(w: World, id: SkinId) {
-  if (!equipSkin(w.meta, id)) return false;
+export function wearSkin(w: World, id: SkinId, seat: 0 | 1 = 0) {
+  if (!equipSkin(w.meta, id, seat)) return false;
   persist(w, w.snap);
   return true;
 }
@@ -635,6 +676,8 @@ function resetField(w: World) {
   w.parts = [];
   w.floaters = [];
   w.rings = [];
+  w.puffs = [];
+  w.arcs = [];
   w.spawns = [];
   w.spawnClock = 0;
   w.between = 0;
@@ -667,19 +710,28 @@ function resetField(w: World) {
   w.linkCd = 0;
 }
 
+/** The ship a pilot is flying: the wingman has a hangar slot of their own. */
+export function shipOf(w: World, p: Player) {
+  return skinDef(p === w.wing ? w.meta.skin2 : w.meta.skin);
+}
+
 function parkPlayer(w: World, snap: RunSnap | null) {
   const kit = loadoutOf(w.meta);
   const p = w.player;
+  const ship = skinDef(w.meta.skin);
   p.x = WORLD_W / 2;
   p.y = Math.max(laneTop(), WORLD_H - 110);
   p.lives = w.arcade ? (snap?.lives ?? 3) : (snap?.lives ?? kit.lives);
   p.weapon = w.arcade ? (snap?.weapon ?? 1) : (snap?.weapon ?? kit.weapon);
   p.bombs = w.arcade ? (snap?.bombs ?? 2) : (snap?.bombs ?? kit.bombs);
-  p.shield = w.arcade ? false : (snap?.shield ?? false);
+  p.shield = (w.arcade ? false : (snap?.shield ?? false)) || !!ship.shield;
   p.feed = snap?.feed ?? 0;
   p.missiles = w.arcade ? 0 : Math.max(kit.missiles, snap?.missiles ?? 0);
   p.missileCd = 0.4;
-  p.family = w.arcade ? "pulse" : (snap?.family ?? kit.family);
+  p.family = w.arcade ? "bubble" : (snap?.family ?? kit.family);
+  p.sec = 0;
+  p.buddy = 0;
+  p.magnet = 0;
   p.splat = 0;
   p.slow = 0;
   p.insured = !w.arcade && w.meta.upgrades.insurance > 0;
@@ -690,13 +742,18 @@ function parkPlayer(w: World, snap: RunSnap | null) {
   p.fireCd = 0.2;
   p.speedUp = 0;
   p.bank = 0;
+  p.mx = 0;
+  p.my = 0;
   p.muzzle = 0;
   w.score = snap?.score ?? 0;
   if (w.coop) {
     const wing = freshPlayer();
     wing.weapon = snap?.weapon2 ?? p.weapon;
+    const ship2 = skinDef(w.meta.skin2);
     wing.bombs = p.bombs;
-    wing.lives = p.lives;
+    // each pilot's lives follow their own ship
+    wing.lives = Math.max(1, p.lives - ship.lives + ship2.lives);
+    wing.shield = !!ship2.shield;
     wing.inv = 1.35;
     wing.fireCd = 0.2;
     wing.missiles = p.missiles;
@@ -935,6 +992,7 @@ function launchLevel(w: World) {
     oy: s.oy,
     vx: s.vx,
     spin: s.spin,
+    line: s.line,
   }));
   grant(list, n);
   w.spawns = list;
@@ -961,14 +1019,32 @@ function grant(list: Spawn[], level: number) {
   give("$", 8 + Math.round(level * 0.6), "dart");
 }
 
-function spawnEnemy(w: World, kind: Kind, x: number, motion: Motion, drop?: PickupKind, y = -28, vx = 0, spin?: number, oy?: number, value = 0, role = "") {
+const TRICKS = new Set(["moth", "gnat", "hermit", "mother", "honey", "ghost", "forge", "spark", "watcher", "splash"]);
+
+function spawnEnemy(
+  w: World,
+  kind: Kind,
+  x: number,
+  motion: Motion,
+  drop?: PickupKind,
+  y = -28,
+  vx = 0,
+  spin?: number,
+  oy?: number,
+  value = 0,
+  role = "",
+  line = Number.NaN,
+) {
   const level = Math.max(1, w.level);
   const ch = Math.min(9, Math.floor((level - 1) / 10));
+  // a critter with a trick is never the one-hit small fry
+  if (kind === "dart" && TRICKS.has(role)) kind = "drone";
   const body = enemyBody(kind, level);
   const size = sizeMul(WORLD_W);
   let hp = body.hp;
   const r = body.r * size;
-  if (role === "wall") hp *= 3;
+  // a lid or a broom is tougher than the small fry it shields, and hides behind a plate
+  if (role === "wall") hp = Math.ceil(hp * 1.5);
   // the shell already makes it slow to kill; keep it from becoming a sponge
   if (role === "hermit") hp = Math.max(4, Math.ceil(hp * 0.6));
   // two guns on the field: critters take a third more, bosses half as much again
@@ -1001,10 +1077,10 @@ function spawnEnemy(w: World, kind: Kind, x: number, motion: Motion, drop?: Pick
     mark: 0,
     oy: oy ?? (kind === "boss" ? Math.min(WORLD_H * 0.18, 132) : kind === "cruiser" ? WORLD_H * 0.16 : WORLD_H * 0.22),
     ch,
-    look: kind === "boss" ? ch : (w.born * 5 + ch * 3 + (kind === "cruiser" ? 3 : kind === "drone" ? 1 : 0)) % FAUNA.length,
+    look: kind === "boss" ? ch : lookFor(ch, kind, role, line, w.born),
     role,
     warn: 0,
-    plate: role === "forge" ? 12 : 0,
+    plate: role === "forge" ? 12 : role === "wall" ? 4 : 0,
     hide: role === "hermit" ? 1.2 : 0,
     size,
   });
@@ -1094,7 +1170,8 @@ function addScore(w: World, base: number, x: number, y: number, show: boolean) {
 }
 
 function bank(w: World, amount: number, x: number, y: number, show: boolean) {
-  const n = Math.max(1, Math.round(amount * (w.arcade ? 0.5 : salvageMul(w.meta.upgrades.salvage))));
+  const cart = Math.max(shipOf(w, w.player).cash ?? 1, w.wing ? (shipOf(w, w.wing).cash ?? 1) : 1);
+  const n = Math.max(1, Math.round(amount * cart * (w.arcade ? 0.5 : salvageMul(w.meta.upgrades.salvage))));
   if (w.arcade) w.purse += n;
   else w.meta.dollars += n;
   if (show) {
@@ -1123,7 +1200,7 @@ function killEnemy(w: World, e: Enemy) {
   if (e.by === 0 || e.by === 1) w.tally[e.by] += 1;
   addScore(w, e.score, e.x, e.y, big);
   if (e.kind === "cruiser") {
-    float(w, e.x, e.y - 22, FAUNA[e.look % FAUNA.length].toUpperCase(), true);
+    float(w, e.x, e.y - 22, lookName(e.look).toUpperCase(), true);
     if (w.rng() < 0.25) float(w, e.x, e.y - 40, LAST_WORDS[Math.floor(w.rng() * LAST_WORDS.length)] ?? "WORTH IT");
   }
   if (e.kind === "boss") {
@@ -1144,6 +1221,10 @@ function killEnemy(w: World, e: Enemy) {
     w.duck = true;
     dropPickup(w, "D", e.x, e.y, 0);
   }
+  if (e.role === "splash") {
+    // Auto-Flush: goes out with a splash, a low fan of slow shots straight down
+    for (let i = -2; i <= 2; i++) pushHostile(w, e.x, e.y, Math.PI / 2 + i * 0.3, 150, 5, 0);
+  }
   if (e.role === "gnat" || e.role === "mother") {
     const bits = e.role === "mother" ? 4 : 3;
     for (let i = 0; i < bits; i++) {
@@ -1160,7 +1241,8 @@ function killEnemy(w: World, e: Enemy) {
     // never more than a few gifts in the air: the screen belongs to the poop
     if (w.rng() < chance && w.pickups.length < 3) {
       const roll = w.rng();
-      const kind: PickupKind = roll < 0.36 ? "W" : roll < 0.56 ? "M" : roll < 0.74 ? "S" : roll < 0.88 ? "B" : "$";
+      const kind: PickupKind =
+        roll < 0.34 ? "W" : roll < 0.52 ? "M" : roll < 0.67 ? "S" : roll < 0.79 ? "B" : roll < 0.84 ? "G" : roll < 0.89 ? "Y" : roll < 0.905 ? "L" : "$";
       dropPickup(w, kind, e.x, e.y, kind === "$" ? 5 + Math.floor(w.level * 0.3) : 0);
     }
   }
@@ -1199,7 +1281,8 @@ function bossLoot(w: World, e: Enemy) {
  */
 function chargeBomb(w: World, amount: number) {
   const boost = w.arcade ? 1 : w.meta.upgrades.pockets >= 2 ? 1.5 : w.meta.upgrades.pockets === 1 ? 1.25 : 1;
-  w.snacks += amount * boost;
+  const tuned = Math.max(shipOf(w, w.player).charge ?? 1, w.wing ? (shipOf(w, w.wing).charge ?? 1) : 1);
+  w.snacks += amount * boost * tuned;
   while (w.snacks >= 100) {
     w.snacks -= 100;
     const p = w.player.alive ? w.player : (w.wing ?? w.player);
@@ -1219,7 +1302,8 @@ function chargeBomb(w: World, amount: number) {
 function takePickup(w: World, kind: PickupKind, value: number, who: Player = w.player) {
   const p = who;
   if (kind === "W") {
-    const family = FAMILIES[(value || 0) % 3] ?? "pulse";
+    // a gift with your own gun on it powers it up; any other gift swaps guns and keeps the power
+    const family = FAMILIES[(((value || 0) % FAMILIES.length) + FAMILIES.length) % FAMILIES.length] ?? "bubble";
     if (family !== p.family) {
       p.family = family;
       w.cues.push("pickup");
@@ -1233,11 +1317,11 @@ function takePickup(w: World, kind: PickupKind, value: number, who: Player = w.p
       w.cues.push("drive");
       float(w, p.x, p.y - 28, "AFTERBURNER", true);
     }
-    cheer(w, p.x, p.y, family === "neutron" ? "#9ed24a" : family === "lance" ? "#e07a3d" : "#7eb6d6");
+    cheer(w, p.x, p.y, familyColor(family));
   } else if (kind === "S") {
     p.shield = true;
     w.cues.push("pickup");
-    float(w, p.x, p.y - 28, "TP SHIELD");
+    float(w, p.x, p.y - 28, "SHIELD BUBBLE");
     cheer(w, p.x, p.y, "#7eb6d6");
   } else if (kind === "B") {
     w.player.bombs = Math.min(5, w.player.bombs + 1);
@@ -1249,10 +1333,30 @@ function takePickup(w: World, kind: PickupKind, value: number, who: Player = w.p
     bank(w, value || 6, p.x, p.y, true);
     cheer(w, p.x, p.y, "#d2a84a");
   } else if (kind === "M") {
-    p.missiles = Math.min(9, p.missiles + 3);
+    const which = (((value || 0) % 3) + 3) % 3;
+    const load = [3, 2, 2][which] + (shipOf(w, p).ammo ?? 0);
+    // a crate of a different kind replaces what is loaded; the same kind tops it up
+    p.missiles = Math.min(9, (p.sec === which ? p.missiles : 0) + load);
+    p.sec = which;
     w.cues.push("pickup");
-    float(w, p.x, p.y - 28, "PLUNGERS ×3", true);
+    float(w, p.x, p.y - 28, `${["PLUNGER MISSILES", "BATH BOMBS", "PAPER ROLLS"][which]} ×${load}`, true);
     cheer(w, p.x, p.y, "#e07a3d");
+  } else if (kind === "L") {
+    if (p.lives < 9) p.lives += 1;
+    else w.score += 5000;
+    w.cues.push("pickup");
+    float(w, p.x, p.y - 28, "EXTRA LIFE", true);
+    cheer(w, p.x, p.y, "#f4e7cf");
+  } else if (kind === "G") {
+    p.magnet = 14;
+    w.cues.push("pickup");
+    float(w, p.x, p.y - 28, "MAGNET", true);
+    cheer(w, p.x, p.y, "#e9463f");
+  } else if (kind === "Y") {
+    p.buddy = 18;
+    w.cues.push("pickup");
+    float(w, p.x, p.y - 28, "BRUSH BUDDY", true);
+    cheer(w, p.x, p.y, "#4fd6e8");
   } else if (kind === "D") {
     w.freeze = w.bossUp ? 1.5 : 3;
     w.cues.push("pickup");
@@ -1268,14 +1372,19 @@ function takePickup(w: World, kind: PickupKind, value: number, who: Player = w.p
 
 function dropPickup(w: World, kind: PickupKind, x: number, y: number, value = 0) {
   const dir = Math.sign(w.player.x - x) || (w.rng() < 0.5 ? -1 : 1);
-  // a gun gift starts on a random family colour and keeps cycling as it falls
-  const hue = kind === "W" ? Math.floor(w.rng() * 3) : undefined;
+  // A gun gift is your own gun a little more than half the time (that is a power-up);
+  // otherwise it is another gun to try. An ammo crate is one of the three second weapons.
+  let hue: number | undefined;
+  if (kind === "W") {
+    const mine = FAMILIES.indexOf(nearestPilot(w, x, y).family);
+    hue = w.rng() < 0.55 ? Math.max(0, mine) : Math.floor(w.rng() * FAMILIES.length);
+  } else if (kind === "M") hue = Math.floor(w.rng() * 3);
   w.pickups.push({ kind, x, y, vx: dir * (12 + w.rng() * 16), vy: 70 + w.rng() * 40, value: hue ?? value, rest: 0, hue });
 }
 
 function stepPickups(w: World, dt: number) {
   const crew = living(w);
-  const magnet = 1 + (w.meta.upgrades.magnet || 0);
+  const baseMagnet = 1 + (w.meta.upgrades.magnet || 0);
   const vacuum = w.clearing && crew.length > 0;
   const next: Pickup[] = [];
   for (const pk of w.pickups) {
@@ -1300,14 +1409,7 @@ function stepPickups(w: World, dt: number) {
       } else next.push(pk);
       continue;
     }
-    if (pk.kind === "W") {
-      pk.age = (pk.age ?? 0) + dt;
-      if ((pk.age ?? 0) >= 2) {
-        pk.age = 0;
-        pk.hue = ((pk.hue ?? 0) + 1) % 3;
-        pk.value = pk.hue;
-      }
-    }
+    const magnet = baseMagnet + (who.magnet > 0 ? 5 : 0) + (shipOf(w, who).magnet ?? 0);
     if (dist < 170 + magnet * 55) {
       pk.vx += (dx / dist) * (80 + magnet * 80) * dt;
       pk.vy += (dy / dist) * (60 + magnet * 46) * dt;
@@ -1406,10 +1508,12 @@ function hurtPlayer(w: World, p: Player = w.player) {
 
 function firePlayer(w: World, p: Player, focus: boolean) {
   const feed = p.feed > 0;
-  const family = p.family || "pulse";
+  const family = p.family || "bubble";
   const rank = Math.max(1, Math.min(6, p.weapon));
+  const size = rank <= 2 ? 0 : rank <= 4 ? 1 : 2;
   const pack = volley(family, rank, focus);
-  const kick = (feed ? 1.18 : 1) * (w.link ? 1.25 : 1);
+  const ship = shipOf(w, p);
+  const kick = (feed ? 1.18 : 1) * (w.link ? 1.25 : 1) * ship.dmg;
   const owner = p === w.wing ? 1 : 0;
   for (const s of pack.shots) {
     if (w.bullets.length > 260) break;
@@ -1430,6 +1534,31 @@ function firePlayer(w: World, p: Player, focus: boolean) {
       pierce: s.pierce,
       splash: s.splash,
       owner,
+      chain: s.chain,
+      rank: size,
+    });
+  }
+  if (p.buddy > 0 && w.bullets.length < 260) {
+    // the Brush Buddy circles the ship and adds a shot of its own to every volley
+    const a = w.time * 3.1;
+    w.bullets.push({
+      x: p.x + Math.cos(a) * 34,
+      y: p.y + Math.sin(a) * 14 - 6,
+      vx: 0,
+      vy: -700,
+      r: 2.4,
+      friendly: true,
+      dmg: 4 * pack.cd * kick,
+      life: 1.2,
+      homing: false,
+      grazed: false,
+      hot: false,
+      tint: 0,
+      style: STYLE.buddy,
+      pierce: 0,
+      splash: 0,
+      owner,
+      rank: 0,
     });
   }
   const pods = podCount(rank);
@@ -1449,43 +1578,96 @@ function firePlayer(w: World, p: Player, focus: boolean) {
       grazed: false,
       hot: feed,
       tint: 0,
-      style: family === "neutron" ? 2 : family === "lance" ? 3 : 0,
-      pierce: family === "lance" ? 1 : 0,
+      style: STYLE[family],
+      pierce: family === "paste" ? 1 : 0,
       splash: 0,
       owner,
+      rank: 0,
     });
   }
   p.muzzle = 0.05;
   const trig = 1 - (w.arcade ? 0 : w.meta.upgrades.trigger * 0.1);
-  p.fireCd = Math.max(0.05, pack.cd * trig * (feed ? 0.7 : 1));
+  p.fireCd = Math.max(0.05, pack.cd * trig * ship.rate * (feed ? 0.7 : 1));
 }
 
+/** The second weapon: whatever the last ammo crate was, one shot per press while ammo lasts. */
 function tryMissile(w: World, p: Player, fire: boolean, dt: number) {
   p.missileCd = Math.max(0, p.missileCd - dt);
   if (!fire || !p.alive || p.missiles <= 0 || p.missileCd > 0) return;
   if (w.bullets.length > 200) return;
+  // nothing to shoot at: keep the ammo
+  if (!w.enemies.some((e) => e.hp > 0 && e.y > 0)) return;
   p.missiles -= 1;
-  p.missileCd = 0.46;
-  const side = p.missiles % 2 === 0 ? 1 : -1;
-  w.bullets.push({
-    x: p.x + side * 12,
-    y: p.y - 6,
-    vx: side * 70,
-    vy: -240,
-    r: 3.6,
-    friendly: true,
-    dmg: 3.4,
-    life: 2.6,
-    homing: true,
-    grazed: false,
-    hot: true,
-    tint: 0,
-    style: 4,
-    pierce: 0,
-    splash: 18,
-    owner: p === w.wing ? 1 : 0,
-  });
+  const owner = p === w.wing ? 1 : 0;
+  const base = { friendly: true, grazed: false, hot: true, tint: 0, owner, rank: 1 } as const;
+  if (p.sec === 1) {
+    // Bath Bomb: lobbed ahead, bursts into foam on the first thing it meets or where it lands
+    p.missileCd = 0.9;
+    w.bullets.push({ ...base, x: p.x, y: p.y - 14, vx: 0, vy: -430, r: 7, dmg: 7, life: 0.85, homing: false, style: STYLE.bathBomb, pierce: 0, splash: 0 });
+  } else if (p.sec === 2) {
+    // Paper Roll: flies up to the nearest line of critters, then unrolls both ways along it
+    p.missileCd = 0.9;
+    w.bullets.push({ ...base, x: p.x, y: p.y - 14, vx: 0, vy: -560, r: 8, dmg: 4, life: 1.6, homing: false, style: STYLE.paperRoll, pierce: 0, splash: 0 });
+  } else {
+    p.missileCd = 0.46;
+    const side = p.missiles % 2 === 0 ? 1 : -1;
+    w.bullets.push({ ...base, x: p.x + side * 12, y: p.y - 6, vx: side * 70, vy: -240, r: 3.6, dmg: 3.4, life: 2.6, homing: true, style: STYLE.plunger, pierce: 0, splash: 18 });
+  }
   w.cues.push("missile");
+}
+
+function puff(w: World, x: number, y: number, style: number, size: number, life = 0.16) {
+  if (w.reduce && life < 0.2) return;
+  if (w.puffs.length > 36) w.puffs.shift();
+  w.puffs.push({ x, y, life, max: life, style, size });
+}
+
+/** Everything inside the circle takes the hit. Bosses and heavies feel a bath bomb, small fry are gone. */
+function foamBurst(w: World, x: number, y: number, radius: number, dmg: number, owner: number, style: number) {
+  for (const e of w.enemies) {
+    if (e.hp <= 0 || hermitHidden(e)) continue;
+    if (Math.hypot(e.x - x, e.y - y) < radius + e.r * 0.5) {
+      e.hp -= dmg;
+      e.by = owner;
+      e.flash = Math.max(e.flash, 0.12);
+    }
+  }
+  // the foam also wipes the poop it touches
+  for (const b of w.bullets) {
+    if (!b.friendly && b.life > 0 && Math.hypot(b.x - x, b.y - y) < radius * 0.8) b.life = 0;
+  }
+  puff(w, x, y, style, radius * 2.1, 0.34);
+  ring(w, x, y, "#c9b8ff", 0.3, radius * 0.4, 3);
+  addTrauma(w, 0.3);
+  w.cues.push("big");
+}
+
+/** A paper roll that reached its line: two ribbons run out along it, one each way. */
+function unroll(w: World, b: Bullet) {
+  b.life = 0;
+  for (const dir of [-1, 1]) {
+    if (w.bullets.length > 280) break;
+    w.bullets.push({
+      x: b.x,
+      y: b.y,
+      vx: dir * 760,
+      vy: 0,
+      r: 15,
+      friendly: true,
+      dmg: b.dmg,
+      life: 1.4,
+      homing: false,
+      grazed: false,
+      hot: true,
+      tint: 0,
+      style: STYLE.ribbon,
+      pierce: 99,
+      splash: 0,
+      owner: b.owner,
+      rank: 1,
+    });
+  }
+  puff(w, b.x, b.y, STYLE.paperRoll, 46, 0.2);
 }
 
 export function podOffsets(time: number, weapon: number) {
@@ -1527,7 +1709,8 @@ function pushHostile(w: World, x: number, y: number, a: number, speed: number, r
     homing: false,
     grazed: false,
     hot: false,
-    tint: 0,
+    // which of the kind's drawings this shot wears, fixed for its life
+    tint: Math.abs(Math.floor(x * 7 + y * 13 + w.bullets.length * 3)),
     shape,
     age: 0,
     bounces: 0,
@@ -1541,12 +1724,15 @@ function releaseShot(w: World, e: Enemy) {
   const down = Math.PI / 2;
   const budget = fireBudget(w.level, WORLD_W);
   const roll = w.rng();
-  const aimed = roll < aimedShare(w.level);
+  // the Security Camera watches you: it always aims, and its shots are quicker
+  const watching = e.role === "watcher";
+  const aimed = watching || roll < aimedShare(w.level);
   const angle = aimed ? aim : down;
-  const shape = poopShape(e.ch, w.level, w.rng());
+  // the Salt and Pepper Twins only ever throw sparks, two at a time
+  const shape = e.role === "spark" ? 12 : poopShape(e.ch, w.level, w.rng());
   const seenName = ["swirl", "pellets", "swirl", "swirl", "swirl", "frozen", "pebble", "comet", "honeyblob", "slime", "ghostpoop", "chili", "zap", "unicorn", "gold", "diamond", "fart"][shape] ?? "swirl";
   if (!w.meta.seen.includes(seenName)) w.meta.seen.push(seenName);
-  const n = volleySize(w.level, w.rng(), w.rng());
+  const n = Math.max(e.role === "spark" ? 2 : 1, volleySize(w.level, w.rng(), w.rng()));
   // shots that split later cost more of the shared budget, so chapters whose
   // signature shot multiplies are not suddenly twice as dense as their neighbours
   if (shape === 5) w.budget -= 1.2;
@@ -1558,7 +1744,7 @@ function releaseShot(w: World, e: Enemy) {
   }
   for (let i = 0; i < n; i++) {
     const spread = (i - (n - 1) / 2) * 0.16;
-    pushHostile(w, e.x, e.y + 10, angle + spread, budget.speed, 6, shape);
+    pushHostile(w, e.x, e.y + 10, angle + spread, budget.speed * (watching ? 1.2 : 1), 6, shape);
   }
   if (!w.meta.seen.includes("swirl")) w.meta.seen.push("swirl");
 }
@@ -1735,6 +1921,10 @@ function present(w: World, dt: number, timers: boolean) {
     r.r += (r.max > 0.3 ? 260 : 110) * dt;
   }
   w.rings = w.rings.filter((r) => r.life > 0);
+  for (const p of w.puffs) p.life -= dt;
+  w.puffs = w.puffs.filter((p) => p.life > 0);
+  for (const a of w.arcs) a.life -= dt;
+  w.arcs = w.arcs.filter((a) => a.life > 0);
   for (const f of w.floaters) {
     f.life -= dt;
     f.y -= 32 * dt;
@@ -1746,7 +1936,8 @@ function present(w: World, dt: number, timers: boolean) {
 function moveEnemy(w: World, e: Enemy, dt: number) {
   e.t += dt;
   if (e.motion === "boss") {
-    const nest = Math.min(WORLD_H * 0.18, 132);
+    // low enough that the big sprites clear the health bar at the top of the screen
+    const nest = 110 + 42 * (e.size ?? 1);
     if (e.dash !== undefined) {
       // charge: 0.9 s warning line, dive at the marked lane, climb back to the nest
       e.dash += dt;
@@ -1793,6 +1984,14 @@ function moveEnemy(w: World, e: Enemy, dt: number) {
     if (e.y < goal) e.y += 110 * dt;
     else e.y = goal + Math.sin(e.t * 1.5 + e.spin) * 8;
     contain(e);
+    // The last one or two stragglers do not get to run back and forth for ever:
+    // they come down for the pilot, where they can be shot.
+    if (w.spawns.length === 0 && w.enemies.length <= 2 && e.t > 5 && e.y >= goal - 4) {
+      e.motion = "dive";
+      e.warn = 0.55;
+      e.flash = 0.55;
+      e.ox = clamp(e.x, edgeOf(e.kind), WORLD_W - edgeOf(e.kind));
+    }
     return;
   }
   if (e.motion === "hold") {
@@ -1848,6 +2047,12 @@ function moveEnemy(w: World, e: Enemy, dt: number) {
   const amp = e.motion === "swoop" ? 36 : e.motion === "sine" ? 16 : 4;
   const sway = Math.sin(e.t * (e.motion === "swoop" ? 1.25 : 0.8) + e.spin) * amp;
   e.x = e.ox + w.formX + sway;
+  if (e.role === "moth" && e.y > goal - 30) {
+    // the moth cannot hold still: it loops around its place in the line
+    const a = e.t * 2.2 + e.spin;
+    e.x += Math.cos(a) * 38;
+    e.y += Math.cos(a + Math.PI / 2) * 130 * dt;
+  }
   if ((e.motion === "rank" || e.motion === "swoop") && e.kind !== "boss" && e.role !== "bonus") {
     const d = Math.max(0, (w.level - 4) / 96);
     const chance = w.level < 4 ? 0 : 0.1 + 0.25 * d;
@@ -1918,7 +2123,7 @@ function stepHazards(w: World, dt: number) {
   }
   w.hazards = w.hazards.filter((h) => h.kind !== "dead");
   for (const b of w.bullets) {
-    if (b.friendly && b.style === 2) {
+    if (b.friendly && b.style === STYLE.soap) {
       for (const h of w.hazards) if (h.kind === "cloud" && Math.hypot(b.x - h.x, b.y - h.y) < 50) h.phase = 3;
     }
   }
@@ -1948,34 +2153,62 @@ function living(w: World): Player[] {
   return list;
 }
 
-function drivePilot(
-  w: World,
-  p: Player,
-  left: boolean,
-  right: boolean,
-  up: boolean,
-  down: boolean,
-  focus: boolean,
-  fire: boolean,
-  pointer: { x: number; y: number } | null,
-  dt: number,
-) {
+/** Top flying speed. The same on every screen, a little quicker where there is more sky to cross. */
+export function cruiseSpeed() {
+  return clamp(WORLD_W * 0.36, 330, 430);
+}
+
+type Fly = {
+  left: boolean;
+  right: boolean;
+  up: boolean;
+  down: boolean;
+  focus: boolean;
+  fire: boolean;
+  alt: boolean;
+  pointer: { x: number; y: number } | null;
+  stick: { x: number; y: number } | null;
+  drag: { dx: number; dy: number } | null;
+};
+
+function drivePilot(w: World, p: Player, fly: Fly, dt: number) {
+  const { focus, fire, pointer } = fly;
   if (!p.alive) {
     p.speedUp = 0;
+    p.mx = 0;
+    p.my = 0;
     p.bank += (0 - p.bank) * (1 - Math.exp(-8 * dt));
     return;
   }
-  let ax = (right ? 1 : 0) - (left ? 1 : 0);
-  let ay = (down ? 1 : 0) - (up ? 1 : 0);
-  const keying = ax !== 0 || ay !== 0;
-  const mag = Math.hypot(ax, ay);
-  if (mag > 0) {
-    ax /= mag;
-    ay /= mag;
+  let ax = (fly.right ? 1 : 0) - (fly.left ? 1 : 0);
+  let ay = (fly.down ? 1 : 0) - (fly.up ? 1 : 0);
+  const keyMag = Math.hypot(ax, ay);
+  if (keyMag > 0) {
+    ax /= keyMag;
+    ay /= keyMag;
+  } else if (fly.stick) {
+    // the stick is analog: a small push is a slow, careful slide
+    const sm = Math.hypot(fly.stick.x, fly.stick.y);
+    if (sm > 0.18) {
+      const gain = Math.min(1, (sm - 0.18) / 0.72) / sm;
+      ax = fly.stick.x * gain;
+      ay = fly.stick.y * gain;
+    }
   }
-  const speed = (focus ? Math.max(170, WORLD_W * 0.16) : Math.max(340, WORLD_W * 0.46)) * (p.slow > 0 ? 0.6 : 1);
+  const keying = ax !== 0 || ay !== 0;
+  const ship = shipOf(w, p);
+  if (ship.buddy) p.buddy = Math.max(p.buddy, 9);
+  const speed = cruiseSpeed() * ship.speed * (focus ? 0.45 : 1) * (p.slow > 0 ? 0.6 : 1);
   let bankTarget = ax * 0.36;
-  if (!keying && pointer) {
+  if (!keying && fly.drag) {
+    // touch: the ship moves exactly as far as the finger did
+    p.x += fly.drag.dx;
+    p.y += fly.drag.dy;
+    p.mx = 0;
+    p.my = 0;
+    p.speedUp = fly.drag.dy < -0.5 ? Math.min(speed, -fly.drag.dy / Math.max(dt, 1e-4)) : 0;
+    bankTarget = clamp(fly.drag.dx / 9, -1, 1) * 0.36;
+  } else if (!keying && pointer) {
     const dx = pointer.x - p.x;
     const dy = pointer.y - p.y;
     const dist = Math.hypot(dx, dy) || 1;
@@ -1983,19 +2216,33 @@ function drivePilot(
     const stepLen = Math.min(dist, spd);
     p.x += (dx / dist) * stepLen;
     p.y += (dy / dist) * stepLen;
+    p.mx = 0;
+    p.my = 0;
     p.speedUp = dy < -1 ? Math.min(speed, Math.abs(dy) / Math.max(dt, 1e-4)) : 0;
     bankTarget = clamp(dx / 70, -1, 1) * 0.36;
   } else {
-    p.x += ax * speed * dt;
-    p.y += ay * speed * dt;
-    p.speedUp = Math.max(0, -ay * speed);
+    // Keys and stick: the ship picks up speed over a few frames instead of jumping to
+    // full speed, so a tap is a small step, and it stops almost at once when you let go.
+    const pick = 1 - Math.exp(-dt / 0.05);
+    const drop = 1 - Math.exp(-dt / 0.028);
+    const tx = ax * speed;
+    const ty = ay * speed;
+    p.mx += (tx - p.mx) * (Math.abs(tx) > Math.abs(p.mx) && tx * p.mx >= 0 ? pick : drop);
+    p.my += (ty - p.my) * (Math.abs(ty) > Math.abs(p.my) && ty * p.my >= 0 ? pick : drop);
+    if (Math.abs(p.mx) < 0.5 && tx === 0) p.mx = 0;
+    if (Math.abs(p.my) < 0.5 && ty === 0) p.my = 0;
+    p.x += p.mx * dt;
+    p.y += p.my * dt;
+    p.speedUp = Math.max(0, -p.my);
   }
   p.x = clamp(p.x, 22, WORLD_W - 22);
   p.y = clamp(p.y, laneTop(), WORLD_H - 36);
   p.bank += (bankTarget - p.bank) * (1 - Math.exp(-12 * dt));
   p.fireCd -= dt;
+  p.buddy = Math.max(0, p.buddy - dt);
+  p.magnet = Math.max(0, p.magnet - dt);
   if (fire && p.fireCd <= 0) firePlayer(w, p, focus);
-  tryMissile(w, p, fire, dt);
+  tryMissile(w, p, fly.alt, dt);
 }
 
 export const REVIVE_TIME = 1.5;
@@ -2058,9 +2305,42 @@ export function step(w: World, dt: number, input: InputState) {
     return;
   }
 
-  drivePilot(w, w.player, input.left, input.right, input.up, input.down, input.focus, input.fire, input.pointer, dt);
+  drivePilot(
+    w,
+    w.player,
+    {
+      left: input.left,
+      right: input.right,
+      up: input.up,
+      down: input.down,
+      focus: input.focus,
+      fire: input.fire,
+      // no second button pressed anywhere (touch, bots): the second weapon fires with the first
+      alt: input.alt ?? input.fire,
+      pointer: input.pointer,
+      stick: input.stick ?? null,
+      drag: input.drag ?? null,
+    },
+    dt,
+  );
   if (w.wing) {
-    drivePilot(w, w.wing, !!input.wingLeft, !!input.wingRight, !!input.wingUp, !!input.wingDown, !!input.wingFocus, !!input.wingFire, null, dt);
+    drivePilot(
+      w,
+      w.wing,
+      {
+        left: !!input.wingLeft,
+        right: !!input.wingRight,
+        up: !!input.wingUp,
+        down: !!input.wingDown,
+        focus: !!input.wingFocus,
+        fire: !!input.wingFire,
+        alt: input.wingAlt ?? !!input.wingFire,
+        pointer: null,
+        stick: input.wingStick ?? null,
+        drag: null,
+      },
+      dt,
+    );
   }
 
   if (input.bomb) detonate(w, w.player);
@@ -2081,7 +2361,7 @@ export function step(w: World, dt: number, input: InputState) {
     else {
       w.spawns = w.spawns.filter((s) => {
         if (w.spawnClock >= s.at) {
-          spawnEnemy(w, s.kind, s.x, s.motion, s.drop, -28, s.vx ?? 0, s.spin, s.oy, s.value ?? 0, s.role ?? "");
+          spawnEnemy(w, s.kind, s.x, s.motion, s.drop, -28, s.vx ?? 0, s.spin, s.oy, s.value ?? 0, s.role ?? "", s.line);
           return false;
         }
         return true;
@@ -2127,6 +2407,17 @@ export function step(w: World, dt: number, input: InputState) {
     }
     if (w.freeze > 0 && !b.friendly) continue;
     b.age = (b.age ?? 0) + dt;
+    if (b.friendly && b.life > 0) {
+      if (b.style === STYLE.bathBomb && b.life <= dt * 1.5) {
+        b.life = 0;
+        foamBurst(w, b.x, b.y, 96, b.dmg, b.owner ?? 0, STYLE.bathBomb);
+        continue;
+      }
+      if (b.style === STYLE.paperRoll && (b.y < WORLD_H * 0.12 || b.life <= dt * 1.5)) {
+        unroll(w, b);
+        continue;
+      }
+    }
     if (!b.friendly && b.shape === 12) b.vx = Math.sin((b.age ?? 0) * 10) * 80;
     if (!b.friendly && b.shape === 13) b.vx = Math.sin((b.age ?? 0) * 6) * 50;
     if (!b.friendly && b.shape === 6 && (b.bounces ?? 0) < 1 && (b.x < 12 || b.x > WORLD_W - 12)) {
@@ -2167,17 +2458,23 @@ export function step(w: World, dt: number, input: InputState) {
       if (e.hp <= 0) continue;
       if (b.hit && b.hit.includes(e)) continue;
       if (Math.hypot(b.x - e.x, b.y - e.y) < e.r + b.r) {
-        if (e.role === "wall" && (b.pierce ?? 0) <= 0 && b.style !== 3 && Math.abs(b.x - e.x) < e.r * 0.65) {
-          b.vy = Math.abs(b.vy);
-          b.y = e.y + e.r + 4;
-          sparkHit(w, e, b.x, b.y);
+        if (b.style === STYLE.bathBomb) {
+          b.life = 0;
+          foamBurst(w, b.x, b.y, 96, b.dmg, b.owner ?? 0, STYLE.bathBomb);
           break;
         }
-        if (e.role === "forge" && e.plate > 0 && b.style !== 3 && (b.pierce ?? 0) <= 0 && b.y > e.y) {
+        if (b.style === STYLE.paperRoll) {
+          b.y = e.y;
+          unroll(w, b);
+          break;
+        }
+        if ((e.role === "forge" || e.role === "wall") && e.plate > 0 && (b.pierce ?? 0) <= 0 && b.y > e.y) {
+          // a plate in front: it soaks up a few shots from below, then falls off.
+          // Shots that pierce, splash or jump go around it.
           e.plate -= 1;
           b.life = 0;
           sparkHit(w, e, b.x, b.y);
-          if (e.plate <= 0) float(w, e.x, e.y - 16, "PLATE OFF");
+          if (e.plate <= 0) float(w, e.x, e.y - 16, e.role === "wall" ? "LID OFF" : "PLATE OFF");
           break;
         }
         if (hermitHidden(e)) {
@@ -2194,7 +2491,7 @@ export function step(w: World, dt: number, input: InputState) {
           }
           continue;
         }
-        e.hp -= b.dmg;
+        e.hp -= b.style === STYLE.mist ? b.dmg * mistPower(b.life) : b.dmg;
         e.by = b.owner ?? 0;
         sparkHit(w, e, b.x, b.y);
         if ((b.splash ?? 0) > 0) {
@@ -2205,7 +2502,39 @@ export function step(w: World, dt: number, input: InputState) {
               other.by = b.owner ?? 0;
             }
           }
-          ring(w, b.x, b.y, b.style === 2 ? "#b6e36a" : "#e07a3d", 0.18, 8, 1.2);
+          ring(w, b.x, b.y, b.style === STYLE.soap ? "#ffd9a0" : "#e07a3d", 0.18, 8, 1.2);
+        }
+        if ((b.chain ?? 0) > 0) {
+          // Zap Brush: the bolt jumps on to the nearest critters, a little weaker each time
+          let from = e;
+          let dmg = b.dmg * 0.6;
+          const done: Enemy[] = [e];
+          for (let j = 0; j < (b.chain ?? 0); j++) {
+            let next: Enemy | null = null;
+            let best = 150 * 150;
+            for (const o of w.enemies) {
+              if (o.hp <= 0 || done.includes(o) || hermitHidden(o)) continue;
+              if (o.role === "ghost" && Math.sin(o.t * 2.4) < 0) continue;
+              const d = (o.x - from.x) ** 2 + (o.y - from.y) ** 2;
+              if (d < best) {
+                best = d;
+                next = o;
+              }
+            }
+            if (!next) break;
+            next.hp -= dmg;
+            next.by = b.owner ?? 0;
+            next.flash = Math.max(next.flash, 0.1);
+            if (w.arcs.length > 24) w.arcs.shift();
+            w.arcs.push({ x1: from.x, y1: from.y, x2: next.x, y2: next.y, life: 0.12 });
+            done.push(next);
+            from = next;
+            dmg *= 0.75;
+          }
+        }
+        if (b.style !== undefined && b.style >= 10 && b.style <= 15) {
+          const sizes = [20, 28, 36];
+          puff(w, b.x, e.kind === "boss" ? b.y : e.y + e.r * 0.3, b.style, sizes[b.rank ?? 0] ?? 24);
         }
         const left = b.pierce ?? 0;
         if (left > 0) {
@@ -2220,7 +2549,7 @@ export function step(w: World, dt: number, input: InputState) {
 
   for (const ship of living(w)) {
     if (ship.inv > 0) continue;
-    const hitR = ship === w.player && input.focus ? 4.5 : ship === w.wing && input.wingFocus ? 4.5 : 7;
+    const hitR = (ship === w.player && input.focus ? 4.5 : ship === w.wing && input.wingFocus ? 4.5 : 7) * shipOf(w, ship).hit;
     for (const b of w.bullets) {
       if (b.friendly || b.life <= 0) continue;
       const d = Math.hypot(b.x - ship.x, b.y - ship.y);
@@ -2414,7 +2743,7 @@ export function startArcade(w: World, daily = false) {
   const today = daySeed();
   w.seed = daily ? today.seed : (Math.random() * 1e9) | 0;
   const spec = arcadeStage(1);
-  startSortie(w, { level: spec.level, lives: 3, weapon: 1, bombs: 2, shield: false, score: 0, feed: 0, coop: false, missiles: 0, family: "pulse", snacks: w.snacks });
+  startSortie(w, { level: spec.level, lives: 3, weapon: 1, bombs: 2, shield: false, score: 0, feed: 0, coop: false, missiles: 0, family: "bubble", snacks: w.snacks });
   w.pinned = frontier;
   w.meta.level = frontier;
   persist(w, w.snap);

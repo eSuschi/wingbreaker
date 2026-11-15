@@ -1,23 +1,16 @@
-import { CHAPTERS, FAUNA, chapterIndex, chapterOf, gunName, skinDef, type SkinDef } from "./meta";
-import { BOSS_LINES, HONEY_RING, bossPhases, familyColor } from "./v3";
+import { bossArt, lookId } from "./army";
+import { CHAPTERS, chapterIndex, chapterOf, gunName, skinDef, type SkinDef } from "./meta";
+import { BOSS_LINES, HONEY_RING, MIST_LIFE, STYLE, bossPhases, familyColor } from "./v3";
 import { drawBossCreature, drawCritter, drawLoot } from "./critters";
 import { drawHostileShot, drawStar } from "./shots";
-import { DASH_WARN, LINK_REACH, REVIVE_TIME, hermitHidden, podOffsets, WORLD_H, WORLD_W, type Enemy, type Player, type World } from "./world";
+import { DASH_WARN, LINK_REACH, REVIVE_TIME, hermitHidden, podOffsets, WORLD_H, WORLD_W, type Bullet, type Enemy, type Player, type World } from "./world";
 
-const WING_SKIN: SkinDef = {
-  id: "navy",
-  name: "Wing",
-  price: 0,
-  hull: "#d7c4a1",
-  edge: "#6a5438",
-  canopy: "#e07a3d",
-  hot: "#f4e7cf",
-};
+/** Team colours when two fly, so nobody has to ask which ship is theirs. */
+const TEAM = ["#ff6b4a", "#35d0c0"];
 
 const plates: (HTMLImageElement | null)[] = Array.from({ length: 10 }, () => null);
-const faces: (HTMLImageElement | null)[] = Array.from({ length: FAUNA.length }, () => null);
-const bosses: (HTMLImageElement | null)[] = Array.from({ length: 10 }, () => null);
-const poops: (HTMLImageElement | null)[] = Array.from({ length: 5 }, () => null);
+const artCache = new Map<string, HTMLImageElement>();
+const whiteCache = new Map<string, HTMLCanvasElement>();
 const hulls = new Map<string, HTMLImageElement>();
 
 function ready(img: HTMLImageElement | null) {
@@ -35,49 +28,78 @@ function chapterPlate(index: number) {
   return ready(plates[i]) ? plates[i] : null;
 }
 
-function faceOf(look: number) {
+/** Any picture under /art, loaded on first use. Returns null until it is ready. */
+export function art(path: string) {
   if (typeof Image === "undefined") return null;
-  const n = FAUNA.length;
-  const i = ((look % n) + n) % n;
-  if (!faces[i]) {
-    const img = new Image();
-    img.src = `/critters/${i}.png`;
-    faces[i] = img;
-  }
-  return ready(faces[i]) ? faces[i] : null;
-}
-
-function bossOf(chapter: number) {
-  if (typeof Image === "undefined") return null;
-  const i = ((chapter % 10) + 10) % 10;
-  if (!bosses[i]) {
-    const img = new Image();
-    img.src = `/bosses/${i}.png`;
-    bosses[i] = img;
-  }
-  return ready(bosses[i]) ? bosses[i] : null;
-}
-
-function hullOf(id: string) {
-  if (typeof Image === "undefined") return null;
-  let img = hulls.get(id);
+  let img = artCache.get(path);
   if (!img) {
     img = new Image();
-    img.src = `/ships/${id}.png`;
-    hulls.set(id, img);
+    img.src = `/art/${path}.webp`;
+    artCache.set(path, img);
   }
   return ready(img) ? img : null;
 }
 
-function poopOf(shape: number) {
-  if (typeof Image === "undefined") return null;
-  const i = shape === 1 ? 1 : shape === 2 ? 2 : shape === 3 ? 3 : shape === 4 ? 4 : 0;
-  if (!poops[i]) {
-    const img = new Image();
-    img.src = `/shots/poop-${i}.png`;
-    poops[i] = img;
+/** The same picture as a flat white shape, flashed over a critter when it is hit. */
+function whiteOf(path: string, img: HTMLImageElement) {
+  let c = whiteCache.get(path);
+  if (!c) {
+    c = document.createElement("canvas");
+    c.width = img.naturalWidth;
+    c.height = img.naturalHeight;
+    const g = c.getContext("2d");
+    if (g) {
+      g.drawImage(img, 0, 0);
+      g.globalCompositeOperation = "source-in";
+      g.fillStyle = "#ffffff";
+      g.fillRect(0, 0, c.width, c.height);
+    }
+    whiteCache.set(path, c);
   }
-  return ready(poops[i]) ? poops[i] : null;
+  return c;
+}
+
+/**
+ * Draws a sprite centred on the origin so that it covers about `size` x `size` world pixels,
+ * whatever its proportions: a long thin plunger and a squat sponge read as the same weight.
+ */
+function blitMass(ctx: CanvasRenderingContext2D, path: string, img: HTMLImageElement, size: number, flash: number) {
+  const k = size / Math.sqrt(img.naturalWidth * img.naturalHeight);
+  const w = img.naturalWidth * k;
+  const h = img.naturalHeight * k;
+  ctx.drawImage(img, -w / 2, -h / 2, w, h);
+  if (flash > 0) {
+    const keep = ctx.globalAlpha;
+    ctx.globalAlpha = keep * Math.min(0.75, flash * 6);
+    ctx.drawImage(whiteOf(path, img), -w / 2, -h / 2, w, h);
+    ctx.globalAlpha = keep;
+  }
+}
+
+function hullPath(id: string) {
+  return `s/${skinDef(id as SkinDef["id"]).art}`;
+}
+
+function hullOf(id: string) {
+  return art(hullPath(id));
+}
+
+/** A tiny ship for the lives row. */
+function drawLifeIcon(ctx: CanvasRenderingContext2D, id: string, x: number, y: number, def: SkinDef) {
+  const img = hullOf(id);
+  ctx.save();
+  ctx.translate(x, y);
+  if (img) blitMass(ctx, hullPath(id), img, 13, 0);
+  else {
+    ctx.scale(0.32, 0.32);
+    ctx.fillStyle = def.hull;
+    ctx.strokeStyle = def.edge;
+    ctx.lineWidth = 1.25;
+    wingPath(ctx);
+    ctx.fill();
+    ctx.stroke();
+  }
+  ctx.restore();
 }
 
 function blitSprite(ctx: CanvasRenderingContext2D, img: HTMLImageElement, height: number, bob: number) {
@@ -135,16 +157,17 @@ export function drawWorld(ctx: CanvasRenderingContext2D, w: World, focus: boolea
   for (const e of w.enemies) drawEnemy(ctx, e, w.time, w.player.x, w.player.y);
 
   for (const b of w.bullets) {
-    if (b.friendly) drawBullet(ctx, b.x, b.y, b.vx, b.vy, b.r, true, b.homing, b.hot, 0, 0, b.style ?? 0);
+    if (b.friendly) drawShot(ctx, b, w.time);
   }
+  drawPuffs(ctx, w);
 
   const showShip =
     w.mode === "play" || w.mode === "pause" || w.mode === "bridge" || w.mode === "clear" || w.mode === "over" || w.mode === "victory";
   if (showShip && w.wing && w.link) drawLink(ctx, w.player, w.wing, w.time);
   if (showShip && w.player.alive) drawPlayer(ctx, w, w.player, focus, skinDef(w.meta.skin), w.meta.skin);
-  if (showShip && w.wing?.alive) drawPlayer(ctx, w, w.wing, false, WING_SKIN, "wing");
+  if (showShip && w.wing?.alive) drawPlayer(ctx, w, w.wing, false, skinDef(w.meta.skin2), w.meta.skin2);
   if (showShip && w.player.down) drawWreck(ctx, w.player, w.meta.skin, w.time);
-  if (showShip && w.wing?.down) drawWreck(ctx, w.wing, "wing", w.time);
+  if (showShip && w.wing?.down) drawWreck(ctx, w.wing, w.meta.skin2, w.time);
 
   for (const b of w.bullets) {
     if (!b.friendly) drawBullet(ctx, b.x, b.y, b.vx, b.vy, b.r, false, false, false, b.tint, b.shape ?? 0, 0, w.time);
@@ -159,6 +182,8 @@ export function drawWorld(ctx: CanvasRenderingContext2D, w: World, focus: boolea
     ctx.fillRect(-p.w / 2, -p.h / 2, p.w, p.h);
     ctx.restore();
   }
+
+  for (const a of w.arcs) drawArc(ctx, a.x1, a.y1, a.x2, a.y2, a.life / 0.12, w.time);
 
   for (const r of w.rings) {
     ctx.save();
@@ -327,39 +352,19 @@ function drawHud(ctx: CanvasRenderingContext2D, w: World) {
   ctx.fillStyle = STEEL_DIM;
   ctx.font = "600 14px Barlow Condensed, sans-serif";
   ctx.fillText(String(w.level).padStart(3, "0"), 16, 78);
-  if (w.player.missiles > 0) {
-    ctx.fillStyle = EMBER;
-    ctx.font = "600 13px Barlow Condensed, sans-serif";
-    ctx.fillText(`MSL ${w.player.missiles}`, 16, w.wing ? 112 : 96);
-  }
+  drawAmmo(ctx, w.player, 16, w.wing ? 104 : 88);
+  if (w.wing) drawAmmo(ctx, w.wing, 92, 104);
   if (w.wing) {
-    for (let i = 0; i < w.wing.lives; i++) {
-      ctx.save();
-      ctx.translate(52 + i * 16, 90);
-      ctx.scale(0.32, 0.32);
-      ctx.fillStyle = WING_SKIN.hull;
-      ctx.strokeStyle = WING_SKIN.edge;
-      ctx.lineWidth = 1.25;
-      wingPath(ctx);
-      ctx.fill();
-      ctx.stroke();
-      ctx.restore();
-    }
+    const skin2 = skinDef(w.meta.skin2);
+    ctx.fillStyle = TEAM[1];
+    ctx.fillRect(42, 84, 3, 12);
+    ctx.fillStyle = TEAM[0];
+    ctx.fillRect(42, 68, 3, 12);
+    for (let i = 0; i < w.wing.lives; i++) drawLifeIcon(ctx, w.meta.skin2, 54 + i * 16, 90, skin2);
   }
   const boss = w.enemies.find((e) => e.kind === "boss" && e.hp > 0);
   if (boss) drawBossBar(ctx, boss);
-  for (let i = 0; i < w.player.lives; i++) {
-    ctx.save();
-    ctx.translate(52 + i * 16, 74);
-    ctx.scale(0.32, 0.32);
-    ctx.fillStyle = skin.hull;
-    ctx.strokeStyle = skin.edge;
-    ctx.lineWidth = 1.25;
-    wingPath(ctx);
-    ctx.fill();
-    ctx.stroke();
-    ctx.restore();
-  }
+  for (let i = 0; i < w.player.lives; i++) drawLifeIcon(ctx, w.meta.skin, 54 + i * 16, 74, skin);
 
   const bw = 168;
   const bx = (WORLD_W - bw) / 2;
@@ -444,7 +449,7 @@ function drawWreck(ctx: CanvasRenderingContext2D, p: Player, spriteId: string, t
   ctx.save();
   ctx.rotate(0.5 + Math.sin(time * 1.3) * 0.08);
   ctx.globalAlpha = 0.4;
-  if (img) blitSprite(ctx, img, spriteId === "wing" ? 40 : 52, 0);
+  if (img) blitMass(ctx, hullPath(spriteId), img, 44, 0);
   else {
     ctx.fillStyle = "#8e99a3";
     wingPath(ctx);
@@ -545,20 +550,31 @@ function drawPlayer(ctx: CanvasRenderingContext2D, w: World, p: Player, focus: b
     const feed = p.feed > 0;
     const flick = 0.45 + (Math.sin(w.time * 46) * 0.5 + 0.5) * 0.7;
     ctx.fillStyle = feed ? `rgba(224,122,61,${0.4 + flick * 0.45})` : `rgba(126,182,214,${0.28 + flick * 0.5})`;
-    flame(ctx, -7, 16, flick * 7);
-    flame(ctx, 7, 16, flick * 7);
+    const img = hullOf(spriteId);
+    // the exhaust sits at the tail of whatever is being flown, a bathtub or a needle
+    const tail = img ? (img.naturalHeight * (46 / Math.sqrt(img.naturalWidth * img.naturalHeight))) / 2 - 7 : 16;
+    flame(ctx, -6, tail, flick * 7);
+    flame(ctx, 6, tail, flick * 7);
     if (p.weapon >= 3) {
-      flame(ctx, -16, 16, flick * 4);
-      flame(ctx, 16, 16, flick * 4);
+      flame(ctx, -14, tail - 3, flick * 4);
+      flame(ctx, 14, tail - 3, flick * 4);
     }
 
-    const img = hullOf(spriteId);
+    if (w.wing) {
+      // two pilots: a team-coloured marker under each ship
+      const team = TEAM[p === w.wing ? 1 : 0];
+      ctx.fillStyle = team;
+      ctx.globalAlpha = 0.9;
+      ctx.beginPath();
+      ctx.moveTo(0, 33);
+      ctx.lineTo(6, 41);
+      ctx.lineTo(-6, 41);
+      ctx.closePath();
+      ctx.fill();
+      ctx.globalAlpha = 1;
+    }
     if (img) {
-      ctx.shadowColor = spriteId === "graphite" ? "rgba(232,238,244,0.7)" : "rgba(0,0,0,0.55)";
-      ctx.shadowBlur = spriteId === "graphite" ? 10 : 8;
-      blitSprite(ctx, img, spriteId === "wing" ? 40 : 52, 0);
-      ctx.shadowBlur = 0;
-      ctx.shadowColor = "transparent";
+      blitMass(ctx, hullPath(spriteId), img, 46 * (skin.hit > 1 ? 1.12 : skin.hit < 1 ? 0.9 : 1), 0);
     } else {
       ctx.fillStyle = skin.hull;
       ctx.strokeStyle = skin.edge;
@@ -614,6 +630,24 @@ function drawPlayer(ctx: CanvasRenderingContext2D, w: World, p: Player, focus: b
       }
     }
 
+    if (p.buddy > 0 && (p.buddy > 3 || Math.floor(w.time * 8) % 2 === 0)) {
+      const a = w.time * 3.1;
+      const img = art("k/brush_buddy");
+      ctx.save();
+      ctx.translate(Math.cos(a) * 34, Math.sin(a) * 14 - 6);
+      if (img) blitLong(ctx, img, 22);
+      ctx.restore();
+    }
+    if (p.magnet > 0) {
+      ctx.strokeStyle = `rgba(233,70,63,${0.25 + 0.2 * Math.sin(w.time * 6)})`;
+      ctx.lineWidth = 1.5;
+      ctx.setLineDash([4, 6]);
+      ctx.lineDashOffset = w.time * 40;
+      ctx.beginPath();
+      ctx.arc(0, 0, 46 + Math.sin(w.time * 3) * 4, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
     for (const pod of podOffsets(w.time, p.weapon)) {
       ctx.save();
       ctx.translate(pod.x, pod.y);
@@ -705,12 +739,21 @@ function drawEnemy(ctx: CanvasRenderingContext2D, e: Enemy, time: number, px: nu
   const pal = CHAPTERS[e.ch] ?? CHAPTERS[0];
   const bob = Math.sin(time * 3.2 + e.spin) * 1.6;
   if (e.kind === "boss") {
-    const face = bossOf(e.ch);
+    const facePath = `b/${bossArt(e.ch, e.mark >= 2)}`;
+    const face = art(facePath);
+    // keep the wounded picture warm so the switch at the last phase never blinks
+    art(`b/${bossArt(e.ch, true)}`);
     if (face) {
-      ctx.shadowColor = "rgba(0,0,0,0.55)";
-      ctx.shadowBlur = 14;
-      blitSprite(ctx, face, 108 * k, bob);
-      ctx.shadowBlur = 0;
+      ctx.save();
+      ctx.translate(0, bob);
+      ctx.rotate(Math.sin(time * 0.9 + e.spin) * 0.035);
+      // a wounded boss shudders
+      if (e.mark >= 2) ctx.translate(Math.sin(time * 47) * 1.2, Math.cos(time * 39) * 0.8);
+      const hit = Math.min(1, e.flash * 5);
+      ctx.scale(1 + hit * 0.03, 1 - hit * 0.03);
+      // a boss is under fire all the time: a full white flash would wash it out
+      blitMass(ctx, facePath, face, 150 * k, e.flash * 0.3);
+      ctx.restore();
     } else {
       ctx.save();
       ctx.scale(k, k);
@@ -741,8 +784,9 @@ function drawEnemy(ctx: CanvasRenderingContext2D, e: Enemy, time: number, px: nu
       ctx.stroke();
     }
   } else {
-    const face = faceOf(e.look);
-    const h = (e.kind === "cruiser" ? 40 : e.kind === "wedge" ? 32 : e.kind === "drone" ? 28 : 26) * k;
+    const facePath = `e/${lookId(e.look)}`;
+    const face = art(facePath);
+    const h = (e.kind === "cruiser" ? 58 : e.kind === "wedge" ? 38 : e.kind === "drone" ? 37 : 32) * k;
     if (e.role === "honey") {
       // Honey Turret: everything inside the amber ring is immune until it dies
       const ringR = HONEY_RING * k;
@@ -765,9 +809,22 @@ function drawEnemy(ctx: CanvasRenderingContext2D, e: Enemy, time: number, px: nu
       ctx.stroke();
     }
     const shell = hermitHidden(e);
-    if (shell) ctx.globalAlpha = 0.35;
-    if (face) blitSprite(ctx, face, h, bob);
-    else {
+    // a ghost that has faded out cannot be hit, and looks it
+    const faded = e.role === "ghost" && Math.sin(e.t * 2.4) < 0;
+    if (shell) ctx.globalAlpha = 0.55;
+    else if (faded) ctx.globalAlpha = 0.28;
+    if (face) {
+      ctx.save();
+      ctx.translate(0, bob);
+      // everyone leans into their own drift a little, divers point where they dive
+      const lean = e.motion === "dive" && e.warn <= 0 ? 0 : Math.sin(time * 2.1 + e.spin * 1.7) * 0.07;
+      ctx.rotate(lean);
+      const hit = Math.min(1, e.flash * 6);
+      const breathe = 1 + Math.sin(time * 4.3 + e.spin) * 0.025;
+      ctx.scale((1 + hit * 0.12) * breathe, (1 - hit * 0.1) / breathe);
+      blitMass(ctx, facePath, face, h, shell ? 0 : e.flash);
+      ctx.restore();
+    } else {
       ctx.save();
       ctx.scale(k, k);
       drawCritter(ctx, e.look, e.kind, time, e.spin, e.flash > 0);
@@ -775,22 +832,24 @@ function drawEnemy(ctx: CanvasRenderingContext2D, e: Enemy, time: number, px: nu
     }
     ctx.globalAlpha = 1;
     if (shell) {
-      // Rock Hermit tucked in its shell: shots ping off until it peeks out
-      ctx.fillStyle = "#4a4238";
-      ctx.strokeStyle = "#a89a86";
-      ctx.lineWidth = 2;
+      // tucked in: shots ping off the lid until it peeks out again
+      ctx.strokeStyle = `rgba(190,200,210,${0.55 + Math.sin(time * 9) * 0.2})`;
+      ctx.lineWidth = 2.5;
+      ctx.setLineDash([7, 5]);
       ctx.beginPath();
-      ctx.arc(0, bob, h * 0.6, 0, Math.PI * 2);
-      ctx.fill();
+      ctx.arc(0, bob, h * 0.62, 0, Math.PI * 2);
       ctx.stroke();
-      ctx.fillStyle = "#6b6052";
-      for (const [ox, oy, r] of [[-6, -4, 4], [7, 2, 5], [-2, 8, 3]] as const) {
-        ctx.beginPath();
-        ctx.arc(ox * k, oy * k + bob, r * k, 0, Math.PI * 2);
-        ctx.fill();
-      }
+      ctx.setLineDash([]);
     }
-    if (e.kind === "cruiser") bar(ctx, 22, h * 0.42, e.hp / e.max, pal.accent);
+    if ((e.role === "forge" || e.role === "wall") && e.plate > 0) {
+      // the lid it hides behind: shots from below stop here until it breaks
+      ctx.strokeStyle = "rgba(214,188,150,0.9)";
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.arc(0, bob, h * 0.66, Math.PI * 0.15, Math.PI * 0.85);
+      ctx.stroke();
+    }
+    if (e.kind === "cruiser") bar(ctx, 30, h * 0.5, e.hp / e.max, pal.accent);
   }
   ctx.restore();
 }
@@ -800,6 +859,190 @@ function bar(ctx: CanvasRenderingContext2D, w: number, y: number, ratio: number,
   ctx.fillRect(-w / 2, y, w, 3);
   ctx.fillStyle = color;
   ctx.fillRect(-w / 2, y, w * Math.max(0, ratio), 3);
+}
+
+const SHOT_ART: Record<number, string> = {
+  [STYLE.bubble]: "bubble_blaster",
+  [STYLE.soap]: "soap_cannon",
+  [STYLE.paste]: "toothpaste_laser",
+  [STYLE.zap]: "zap_brush",
+  [STYLE.flush]: "flush_wave",
+  [STYLE.mist]: "freshener_mist",
+};
+const SHOT_TINT: Record<number, string> = {
+  [STYLE.bubble]: "#4fd6e8",
+  [STYLE.soap]: "#f28c1c",
+  [STYLE.paste]: "#e9463f",
+  [STYLE.zap]: "#f5d21c",
+  [STYLE.flush]: "#3f7fe0",
+  [STYLE.mist]: "#7fd38a",
+};
+/** longest side of each gun's shot at small / medium / large, in world pixels */
+const SHOT_SIZE: Record<number, [number, number, number]> = {
+  [STYLE.bubble]: [13, 17, 22],
+  [STYLE.soap]: [21, 27, 33],
+  [STYLE.paste]: [27, 33, 41],
+  [STYLE.zap]: [23, 29, 37],
+  [STYLE.flush]: [34, 40, 46],
+  [STYLE.mist]: [18, 23, 29],
+};
+const SIZE_NAME = ["small", "medium", "large"];
+
+/** Draws a sprite centred on the origin with its longest side `size` world pixels long. */
+function blitLong(ctx: CanvasRenderingContext2D, img: HTMLImageElement, size: number) {
+  const k = size / Math.max(img.naturalWidth, img.naturalHeight);
+  const w = img.naturalWidth * k;
+  const h = img.naturalHeight * k;
+  ctx.drawImage(img, -w / 2, -h / 2, w, h);
+}
+
+/** One of the pilots' own shots. */
+function drawShot(ctx: CanvasRenderingContext2D, b: Bullet, time: number) {
+  const style = b.style ?? STYLE.bubble;
+  const rank = Math.max(0, Math.min(2, b.rank ?? 0));
+  ctx.save();
+  ctx.translate(b.x, b.y);
+  const heading = Math.atan2(b.vy, b.vx) + Math.PI / 2;
+  const family = SHOT_ART[style];
+  if (family) {
+    const img = art(`g/${family}_projectile_${SIZE_NAME[rank]}`);
+    let size = SHOT_SIZE[style][rank];
+    // support shots (pods) are the same gun, half the size
+    if (b.r < 2) size *= 0.62;
+    if (style === STYLE.flush) size = Math.max(size, b.r * 2.5);
+    if (style === STYLE.mist) {
+      // the mist swells and thins as it runs out of reach
+      const left = Math.max(0, Math.min(1, b.life / MIST_LIFE));
+      size *= 1.9 - left * 0.9;
+      ctx.globalAlpha = 0.35 + left * 0.65;
+    }
+    if (style === STYLE.bubble) ctx.rotate(Math.sin(time * 9 + b.x * 0.3) * 0.2);
+    else if (style === STYLE.zap) ctx.rotate(heading + Math.sin(time * 40 + b.y) * 0.18);
+    else ctx.rotate(heading);
+    if (img) {
+      if (b.hot) {
+        ctx.shadowColor = "#ffb07a";
+        ctx.shadowBlur = 6;
+      }
+      blitLong(ctx, img, size);
+    } else {
+      ctx.fillStyle = SHOT_TINT[style];
+      ctx.beginPath();
+      ctx.ellipse(0, 0, size * 0.25, size * 0.5, 0, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  } else if (style === STYLE.plunger || b.homing) {
+    ctx.rotate(heading);
+    const img = art("g/plunger_missile_projectile");
+    if (img) blitLong(ctx, img, 30);
+    else drawMissile(ctx, b.hot);
+  } else if (style === STYLE.bathBomb) {
+    ctx.rotate(heading + Math.sin(time * 14) * 0.15);
+    const img = art("g/bath_bomb_projectile");
+    if (img) blitLong(ctx, img, 34);
+    else drawNeutron(ctx, 7, true);
+  } else if (style === STYLE.paperRoll || style === STYLE.ribbon) {
+    const img = art("g/paper_roll_projectile");
+    if (style === STYLE.ribbon) {
+      // the strip of paper it leaves behind, back toward where it started
+      const dir = Math.sign(b.vx) || 1;
+      const len = Math.min(170, (b.age ?? 0) * 760);
+      ctx.fillStyle = "rgba(240,228,200,0.92)";
+      ctx.fillRect(dir > 0 ? -len : 0, -4, len, 8);
+      ctx.fillStyle = "rgba(120,100,70,0.35)";
+      for (let x = 14; x < len; x += 18) ctx.fillRect(dir > 0 ? -x : x, -4, 1.2, 8);
+    } else ctx.rotate(time * 9);
+    if (img) blitLong(ctx, img, 34);
+    else drawNeutron(ctx, 7, false);
+  } else if (style === STYLE.buddy) {
+    ctx.fillStyle = "rgba(79,214,232,0.35)";
+    ctx.beginPath();
+    ctx.ellipse(0, 3, 3.6, 9, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = "#d8fbff";
+    ctx.beginPath();
+    ctx.ellipse(0, 0, 2, 6, 0, 0, Math.PI * 2);
+    ctx.fill();
+  } else {
+    ctx.rotate(heading);
+    drawPulse(ctx, b.r, b.hot);
+  }
+  ctx.restore();
+}
+
+/** The splash a shot leaves where it lands. */
+function drawPuffs(ctx: CanvasRenderingContext2D, w: World) {
+  for (const p of w.puffs) {
+    const left = Math.max(0, p.life / p.max);
+    const grow = 0.65 + (1 - left) * 0.6;
+    ctx.save();
+    ctx.translate(p.x, p.y);
+    ctx.globalAlpha = Math.min(1, left * 1.6);
+    const family = SHOT_ART[p.style];
+    const img = family ? art(`g/${family}_impact`) : null;
+    if (img) blitLong(ctx, img, p.size * grow);
+    else if (p.style === STYLE.bathBomb) {
+      // foam: a cluster of bubbles blowing outward
+      for (let i = 0; i < 9; i++) {
+        const a = i * 2.4 + p.x * 0.01;
+        const d = p.size * 0.26 * grow * (0.55 + (i % 3) * 0.28);
+        const r = p.size * (0.13 + (i % 4) * 0.035) * grow;
+        ctx.fillStyle = i % 2 ? "rgba(226,214,255,0.85)" : "rgba(255,255,255,0.9)";
+        ctx.beginPath();
+        ctx.arc(Math.cos(a) * d, Math.sin(a) * d, r, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    } else {
+      ctx.strokeStyle = "#f0e4c8";
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.arc(0, 0, p.size * 0.4 * grow, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+}
+
+/** A lightning jump: a jagged bright line that redraws itself every frame. */
+function drawArc(ctx: CanvasRenderingContext2D, x1: number, y1: number, x2: number, y2: number, left: number, time: number) {
+  const dx = x2 - x1;
+  const dy = y2 - y1;
+  const len = Math.hypot(dx, dy) || 1;
+  const nx = -dy / len;
+  const ny = dx / len;
+  const steps = Math.max(3, Math.round(len / 16));
+  ctx.save();
+  ctx.globalAlpha = Math.max(0, Math.min(1, left));
+  ctx.lineJoin = "round";
+  for (const [width, color] of [[5, "rgba(245,210,28,0.45)"], [2, "#fffbe0"]] as const) {
+    ctx.strokeStyle = color;
+    ctx.lineWidth = width;
+    ctx.beginPath();
+    ctx.moveTo(x1, y1);
+    for (let i = 1; i < steps; i++) {
+      const t = i / steps;
+      const off = Math.sin(i * 12.9898 + Math.floor(time * 60) * 78.233) * 7;
+      ctx.lineTo(x1 + dx * t + nx * off, y1 + dy * t + ny * off);
+    }
+    ctx.lineTo(x2, y2);
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+/** Second-weapon ammo: the crate's picture and how many shots are left. */
+function drawAmmo(ctx: CanvasRenderingContext2D, p: Player, x: number, y: number) {
+  if (p.missiles <= 0) return;
+  const path = `k/${AMMO[p.sec] ?? AMMO[0]}_pickup`;
+  const icon = art(path);
+  ctx.save();
+  ctx.translate(x + 9, y);
+  if (icon) blitLong(ctx, icon, 18);
+  ctx.fillStyle = EMBER;
+  ctx.font = "600 14px Barlow Condensed, sans-serif";
+  ctx.textAlign = "left";
+  ctx.fillText(`×${p.missiles}`, 13, 5);
+  ctx.restore();
 }
 
 function drawBullet(
@@ -828,7 +1071,7 @@ function drawBullet(
     else drawPulse(ctx, r, hot);
   } else {
     const small = WORLD_W < 560;
-    if (!drawHostileShot(ctx, shape, x, y, vx, vy, time, small)) {
+    if (!drawHostileShot(ctx, shape, x, y, vx, vy, time, small, tint)) {
       // art still loading: plain painted fallback
       if (small) ctx.scale(0.8, 0.8);
       ctx.rotate(Math.sin(y * 0.09 + x * 0.04) * 0.45);
@@ -930,11 +1173,6 @@ function drawMissile(ctx: CanvasRenderingContext2D, hot: boolean) {
 }
 
 function drawPoop(ctx: CanvasRenderingContext2D, shape: number, s: number, tint: number) {
-  const img = shape <= 4 ? poopOf(shape) : null;
-  if (img) {
-    blitFree(ctx, img, shape === 2 ? 16 : shape === 3 ? 34 : 26);
-    return;
-  }
   const fill =
     shape === 5 ? "#b7e4f2" :
     shape === 6 ? "#c4a574" :
@@ -1014,6 +1252,23 @@ function drawPoop(ctx: CanvasRenderingContext2D, shape: number, s: number, tint:
   void tint;
 }
 
+const GIFTS = ["bubble_blaster", "soap_cannon", "toothpaste_laser", "zap_brush", "flush_wave", "freshener_mist"];
+const AMMO = ["plunger_missile", "bath_bomb", "paper_roll"];
+
+/** The picture a pickup wears. A gift box shows the gun family inside, an ammo crate its kind. */
+function pickupArt(kind: string, hue: number) {
+  if (kind === "W") return `k/${GIFTS[((hue % GIFTS.length) + GIFTS.length) % GIFTS.length]}_gift`;
+  if (kind === "M") return `k/${AMMO[((hue % AMMO.length) + AMMO.length) % AMMO.length]}_pickup`;
+  if (kind === "S") return "k/shield_bubble";
+  if (kind === "B") return "k/air_freshener";
+  if (kind === "D") return "k/rubber_duck";
+  if (kind === "$") return "k/gold_coin";
+  if (kind === "L") return "k/extra_life";
+  if (kind === "G") return "k/magnet";
+  if (kind === "Y") return "k/brush_buddy";
+  return "";
+}
+
 function drawPickup(ctx: CanvasRenderingContext2D, kind: string, x: number, y: number, time: number, hue = 0) {
   ctx.save();
   ctx.translate(x, y);
@@ -1036,6 +1291,17 @@ function drawPickup(ctx: CanvasRenderingContext2D, kind: string, x: number, y: n
     const a = time * 2.4 + x * 0.05;
     drawStar(ctx, Math.cos(a) * reach * 0.78, Math.sin(a) * reach * 0.78, 3.4, "#ffffff");
     drawStar(ctx, Math.cos(a + 2.6) * reach * 0.7, Math.sin(a + 2.6) * reach * 0.7, 2.4, tone);
+  }
+  const iconPath = pickupArt(kind, hue);
+  const icon = iconPath ? art(iconPath) : null;
+  if (iconPath && icon) {
+    ctx.translate(0, Math.sin(time * 4 + x) * 1.6);
+    if (power) ctx.rotate(Math.sin(time * 2.2 + x) * 0.14);
+    else ctx.scale(0.55 + Math.abs(Math.sin(time * 3 + x)) * 0.45, 1);
+    const size = (power ? 31 : 21) * (small ? 0.88 : 1);
+    blitMass(ctx, iconPath, icon, size, 0);
+    ctx.restore();
+    return;
   }
   const z = (small ? 1.05 : 1.3) * (power ? 1 : 0.9);
   ctx.scale(z, z);

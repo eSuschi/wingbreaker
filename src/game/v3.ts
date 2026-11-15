@@ -1,4 +1,6 @@
-export type GunFamily = "pulse" | "neutron" | "lance";
+import { armyHas, armyRoles } from "./army";
+
+export type GunFamily = "bubble" | "soap" | "paste" | "zap" | "flush" | "mist";
 export type VKind = "dart" | "wedge" | "cruiser" | "drone" | "boss";
 
 export type VSpawn = {
@@ -10,6 +12,8 @@ export type VSpawn = {
   oy: number;
   vx?: number;
   spin?: number;
+  /** Formation row: everyone in one line wears the same look. */
+  line?: number;
 };
 
 export type VHazard = {
@@ -36,6 +40,8 @@ export type Shot = {
   pierce: number;
   splash: number;
   life: number;
+  /** Zap Brush: how many more critters the bolt jumps to after its first hit */
+  chain: number;
 };
 
 const mulberry = (seed: number) => {
@@ -65,14 +71,14 @@ export function sizeMul(width: number) {
 export function enemyBody(kind: VKind, level: number) {
   const { lv } = diff(level);
   const tip = Math.floor(lv / 34);
-  if (kind === "dart") return { hp: 1 + Math.floor(lv / 34), r: 11, score: 70 + lv, vy: 90, cash: 1 + tip };
-  if (kind === "drone") return { hp: 2 + Math.floor(lv / 22), r: 12, score: 110 + lv * 2, vy: 84, cash: 1 + tip };
-  if (kind === "wedge") return { hp: 2 + Math.floor(lv / 15), r: 13, score: 130 + lv * 2, vy: 72, cash: 2 + tip };
-  if (kind === "cruiser") return { hp: 7 + Math.floor(lv / 6), r: 16, score: 260 + lv * 3, vy: 48, cash: 5 + tip };
+  if (kind === "dart") return { hp: 1 + Math.floor(lv / 34), r: 13, score: 70 + lv, vy: 90, cash: 1 + tip };
+  if (kind === "drone") return { hp: 2 + Math.floor(lv / 22), r: 14, score: 110 + lv * 2, vy: 84, cash: 1 + tip };
+  if (kind === "wedge") return { hp: 2 + Math.floor(lv / 15), r: 15, score: 130 + lv * 2, vy: 72, cash: 2 + tip };
+  if (kind === "cruiser") return { hp: 7 + Math.floor(lv / 6), r: 22, score: 260 + lv * 3, vy: 48, cash: 5 + tip };
   // Tuned so a typical gun for that point in the campaign clears a boss in
   // roughly 40 s (level 10) to 90 s (level 100) of steady fire.
   const hp = Math.round(400 + lv * 9 + lv * lv * 0.12);
-  return { hp, r: 34, score: 4000 + lv * 40, vy: 46, cash: 30 + lv };
+  return { hp, r: 46, score: 4000 + lv * 40, vy: 46, cash: 30 + lv };
 }
 
 /**
@@ -177,7 +183,7 @@ export function extraLifeAt(score: number, paid: number) {
 // level 9 of a chapter is the gauntlet: four waves, a little denser than the rest
 const DENSITY = [0.85, 0.9, 0.95, 1, 1, 1.05, 1.1, 1.12, 1.15];
 
-function pushGrid(out: VSpawn[], at: number, n: number, kind: VKind, role: string, W: number, H: number, motion: string, base: number) {
+function pushGrid(out: VSpawn[], at: number, n: number, kind: VKind, role: string, W: number, H: number, motion: string, base: number, line: number) {
   const cols = Math.max(4, Math.min(10, Math.round(W / (72 * sizeMul(W)))));
   const rows = Math.ceil(n / cols);
   let i = 0;
@@ -187,7 +193,7 @@ function pushGrid(out: VSpawn[], at: number, n: number, kind: VKind, role: strin
     const x0 = (W - span) / 2;
     for (let c = 0; c < count; c++) {
       const x = count === 1 ? W / 2 : x0 + (span * c) / (count - 1);
-      out.push({ at: at + r * 0.35, kind, x, motion, role, oy: base + H * r * 0.062, spin: i });
+      out.push({ at: at + r * 0.35, kind, x, motion, role, oy: base + H * r * 0.074, spin: i, line: line + r });
       i += 1;
     }
   }
@@ -229,7 +235,25 @@ export function planLevel(level: number, W: number, H: number, seed: number) {
     // formations fill the upper half of the screen instead of one thin strip.
     const base = H * (0.09 + 0.085 * (waves - 1 - wave));
     if (form === "grid" || form === "wall") {
-      pushGrid(out, at, n, wave === 0 ? "dart" : "wedge", form === "wall" && wave === 0 ? "wall" : special, W, H, "rank", base);
+      // the first grid is small fry with one trick critter per row; later grids are divers
+      const walled = form === "wall" && wave === 0 && armyHas(ch, "wall");
+      const before = out.length;
+      pushGrid(out, at, n, wave === 0 ? "dart" : "wedge", walled ? "wall" : "", W, H, "rank", base, wave * 2);
+      if (walled) {
+        // only the front row carries lids; the rows behind it are ordinary small fry
+        const front = Math.max(...out.slice(before).map((sp) => sp.line ?? 0));
+        for (let i = before; i < out.length; i++) if ((out[i].line ?? 0) !== front) out[i].role = "";
+      }
+      if (!walled && special) {
+        const rowsSeen = new Set<number>();
+        for (let i = before; i < out.length; i++) {
+          const row = out[i].line ?? 0;
+          if (rowsSeen.has(row)) continue;
+          rowsSeen.add(row);
+          const mid = out.filter((s, j) => j >= before && (s.line ?? 0) === row);
+          mid[Math.floor(mid.length / 2)].role = special;
+        }
+      }
     } else if (form === "vwing") {
       const deep = Math.max(1, Math.floor((n - 1) / 2));
       const stepY = Math.min(H * 0.03, (H * 0.2) / deep);
@@ -245,6 +269,7 @@ export function planLevel(level: number, W: number, H: number, seed: number) {
           // a real V: the tip flies lowest, the wings trail up and out
           oy: base + (deep - row) * stepY,
           spin: i,
+          line: wave,
         });
       }
     } else if (form === "ring") {
@@ -256,9 +281,10 @@ export function planLevel(level: number, W: number, H: number, seed: number) {
           kind: "drone",
           x: W / 2 + Math.cos(a) * Math.min(W * 0.28, 160),
           motion: "spiral",
-          role: special,
+          role: i % 5 === 0 ? special : "",
           oy: base + H * 0.07 + Math.sin(a) * H * 0.065,
           spin: a,
+          line: wave,
         });
       }
     } else if (form === "conga" || form === "rain") {
@@ -268,9 +294,10 @@ export function planLevel(level: number, W: number, H: number, seed: number) {
           kind: "dart",
           x: W * (0.15 + rng() * 0.7),
           motion: form === "rain" ? "rain" : "conga",
-          role: form === "rain" ? "rain" : special,
+          role: form === "rain" ? "rain" : i % 5 === 2 ? special : "",
           oy: -20,
           spin: i,
+          line: wave + 1,
         });
       }
     } else if (form === "pincer") {
@@ -281,9 +308,10 @@ export function planLevel(level: number, W: number, H: number, seed: number) {
           kind: i % 3 === 0 ? "wedge" : "dart",
           x: left ? W * 0.08 : W * 0.92,
           motion: "pincer",
-          role: special,
+          role: i % 6 === 1 ? special : "",
           oy: base + H * (i % 3) * 0.06,
           vx: left ? 140 : -140,
+          line: wave + (left ? 0 : 1),
         });
       }
     } else if (form === "escort") {
@@ -300,6 +328,7 @@ export function planLevel(level: number, W: number, H: number, seed: number) {
           role: "",
           oy: base + H * 0.07 + Math.sin(a) * ringR * 0.75,
           spin: i,
+          line: i % 2,
         });
       }
     } else {
@@ -309,15 +338,17 @@ export function planLevel(level: number, W: number, H: number, seed: number) {
           kind: i % 4 === 0 ? "wedge" : "dart",
           x: 40 + (i / Math.max(1, n - 1)) * (W - 80),
           motion: "swoop",
-          role: special,
+          role: i % 5 === 2 ? special : "",
           oy: base + H * (i % 3) * 0.07,
           spin: i,
+          line: wave + (i % 3),
         });
       }
     }
   }
   if (ch >= 2 && k >= 6) {
-    out.push({ at: 1.2, kind: "cruiser", x: W * 0.3, motion: "hold", role: "hermit", oy: H * 0.18 });
+    // a heavy with loot in the back row; in the Cleaning Closet it hides in a bucket
+    out.push({ at: 1.2, kind: "cruiser", x: W * 0.3, motion: "hold", role: armyHas(ch, "hermit") ? "hermit" : "", oy: H * 0.18 });
   }
   // One Honey Turret per level, not a whole wave of them: it shields what is
   // inside its ring, so a crowd of turrets made everything immune at once.
@@ -336,18 +367,16 @@ export function planLevel(level: number, W: number, H: number, seed: number) {
   return { spawns: out, bonus: false, banner: "" };
 }
 
+/**
+ * Each room has up to two trick critters. The first shows up from the room's second level
+ * (first level in later rooms), the second joins from the fourth, one wave each.
+ */
 function chapterRole(ch: number, k: number, wave: number) {
-  if (wave !== 0) return "";
-  if (ch === 1 && k <= 3) return "gnat";
-  if (ch === 2 && k === 1) return "hermit";
-  if (ch === 3) return "moth";
-  if (ch === 4 && k !== 5) return "honey";
-  if (ch === 5) return "mother";
-  if (ch === 6) return "ghost";
-  if (ch === 7) return "forge";
-  if (ch === 8) return "spark";
-  if (ch === 9) return "watcher";
-  return "";
+  const roles = armyRoles(ch).filter((r) => r !== "wall");
+  if (ch === 0 && k < 6) return "";
+  if (wave === 0) return k >= 2 || ch >= 3 ? (roles[0] ?? "") : "";
+  if (wave === 1) return k >= 4 ? (roles[1] ?? "") : "";
+  return k >= 8 ? (roles[0] ?? "") : "";
 }
 
 export function planHazards(level: number, W: number, H: number): VHazard[] {
@@ -390,11 +419,32 @@ export function poopShape(chapter: number, level: number, roll: number) {
 }
 
 /**
- * One volley for a gun family at a rank. Every rank raises damage on a single
- * target in the same steps for all three families (about 8, 12, 16, 20, 25 and
- * 30 a second); the families differ in what else they do:
- * PULSE adds angled side shots that sweep a wide area, NEUTRON's slow balls
- * splash 40% onto neighbours, LANCE's narrow beams pierce through a column.
+ * How long a puff of Freshener Mist lasts: at 640 px a second that is about 450 px of reach.
+ * It thins out on the way: full strength up close, well under half at the far end.
+ */
+export const MIST_LIFE = 0.7;
+
+/** How much of its punch a puff of mist still has with `life` seconds left. */
+export function mistPower(life: number) {
+  const left = Math.max(0, Math.min(1, life / MIST_LIFE));
+  return 0.4 + 0.6 * left;
+}
+
+/** Bullet styles, shared by the logic (what a shot does) and the renderer (what it looks like). */
+export const STYLE = { bubble: 10, soap: 11, paste: 12, zap: 13, flush: 14, mist: 15, plunger: 4, bathBomb: 16, paperRoll: 17, ribbon: 18, buddy: 19 } as const;
+
+/**
+ * One volley for a gun family at a power level. Power is shared by all six families and
+ * every level raises damage on a single target in the same steps (about 8, 12, 16, 20,
+ * 25 and 30 a second). What differs is the shape of the fire, and with more power every
+ * family throws more at once:
+ *
+ * BUBBLE BLASTER  quick bubbles, a fan that widens (1, 2, 4, 4, 6, 6)
+ * SOAP CANNON     slow heavy bars that burst and splash the neighbours (1, 1, 2, 2, 3, 3)
+ * TOOTHPASTE LASER thin fast streaks that go straight through a column (1, 1, 2, 2, 2, 3)
+ * ZAP BRUSH       bolts that jump on to nearby critters (jumps 1, 1, 2, 2, 3, 3)
+ * FLUSH WAVE      wide slow crescents that wash through everything (1, 1, 2, 2, 3, 3)
+ * FRESHENER MIST  a short cone, half as strong again as the rest, but only up close
  */
 export function volley(family: GunFamily, rank: number, focus: boolean): { shots: Shot[]; cd: number } {
   const r = Math.max(1, Math.min(6, Math.round(rank)));
@@ -404,52 +454,91 @@ export function volley(family: GunFamily, rank: number, focus: boolean): { shots
   const add = (s: Partial<Shot> & { ox: number; vx: number; vy: number }) => {
     shots.push({
       ox: s.ox,
-      oy: s.oy,
+      oy: s.oy ?? -12,
       vx: s.vx,
       vy: s.vy,
       r: s.r ?? 2.2,
       dmg: s.dmg ?? 1,
-      style: s.style ?? 0,
+      style: s.style ?? STYLE.bubble,
       pierce: s.pierce ?? 0,
       splash: s.splash ?? 0,
       life: s.life ?? 1.3,
+      chain: s.chain ?? 0,
     });
   };
-  if (family === "neutron") {
-    const balls = [1, 1, 2, 2, 3, 3][i];
-    const dmg = [1.6, 2.4, 1.6, 2, 1.65, 2][i];
+  // damage one target takes in a second at each power level, the same for every family
+  const dps = [8, 12, 16, 20, 25, 30][i];
+  if (family === "soap") {
+    const bars = [1, 1, 2, 2, 3, 3][i];
+    const cd = 0.2;
     const splash = [26, 28, 30, 32, 36, 40][i];
-    for (let b = 0; b < balls; b++) {
-      const ox = (b - (balls - 1) / 2) * 9;
-      add({ ox, vx: ox * 0.8, vy: -620, r: 5.2, dmg, style: 2, splash, life: 1.4 });
+    for (let b = 0; b < bars; b++) {
+      const ox = (b - (bars - 1) / 2) * 11;
+      add({ ox, vx: ox * 0.8, vy: -620, r: 5.2 + i * 0.3, dmg: (dps * cd) / bars, style: STYLE.soap, splash, life: 1.4 });
     }
-    return { shots, cd: 0.2 };
+    return { shots, cd };
   }
-  if (family === "lance") {
+  if (family === "paste") {
     const beams = [1, 1, 2, 2, 2, 3][i];
-    const dmg = [1, 1.5, 1, 1.25, 1.55, 1.25][i];
+    const cd = 0.125;
     const pierce = [2, 2, 3, 3, 4, 5][i];
     for (let b = 0; b < beams; b++) {
-      const ox = (b - (beams - 1) / 2) * 7;
-      add({ ox, vx: 0, vy: -1100, r: 3.1, dmg, style: 3, pierce, life: 0.85 });
+      const ox = (b - (beams - 1) / 2) * 8;
+      add({ ox, vx: 0, vy: -1100, r: 3.1, dmg: (dps * cd) / beams, style: STYLE.paste, pierce, life: 0.85 });
     }
-    return { shots, cd: 0.125 };
+    return { shots, cd };
   }
-  if (r === 1) add({ ox: 0, vx: 0, vy: -780, dmg: 1, style: 0 });
+  if (family === "zap") {
+    const bolts = [1, 1, 1, 2, 2, 2][i];
+    const cd = 0.16;
+    const chain = [1, 1, 2, 2, 3, 3][i];
+    for (let b = 0; b < bolts; b++) {
+      const ox = (b - (bolts - 1) / 2) * 12;
+      // a little under par on the first target: the jumps make up for it, and more
+      add({ ox, vx: 0, vy: -940, r: 3.4, dmg: (dps * cd * 0.88) / bolts, style: STYLE.zap, chain, life: 1 });
+    }
+    return { shots, cd };
+  }
+  if (family === "flush") {
+    const waves = [1, 1, 2, 2, 3, 3][i];
+    const cd = 0.3;
+    const wide = [13, 15, 15, 17, 17, 19][i];
+    for (let b = 0; b < waves; b++) {
+      const ox = (b - (waves - 1) / 2) * 22;
+      add({ ox, vx: ox * 1.2 * tight, vy: -540, r: wide, dmg: (dps * cd * 0.9) / waves, style: STYLE.flush, pierce: 99, life: 1.5 });
+    }
+    return { shots, cd };
+  }
+  if (family === "mist") {
+    const puffs = [2, 2, 3, 3, 4, 5][i];
+    const cd = 0.11;
+    for (let b = 0; b < puffs; b++) {
+      const a = (b - (puffs - 1) / 2) * 0.14 * (focus ? 0.5 : 1);
+      // Short-lived and fading: from the back of the lane it only tickles. Fly up close
+      // and it hits half as hard again as any other gun.
+      add({ ox: Math.sin(a) * 10, vx: Math.sin(a) * 640, vy: -Math.cos(a) * 640, r: 7 + i * 0.6, dmg: (dps * cd * 1.5) / puffs, style: STYLE.mist, life: MIST_LIFE });
+    }
+    return { shots, cd };
+  }
+  // BUBBLE BLASTER
+  const cd = 0.125;
+  if (r === 1) add({ ox: 0, vx: 0, vy: -780, dmg: dps * cd, r: 3 });
   else {
-    const core = [0, 0.75, 1, 1.25, 1.55, 1.85][i];
-    add({ ox: -7, vx: 0, vy: -780, dmg: core, style: 0 });
-    add({ ox: 7, vx: 0, vy: -780, dmg: core, style: 0 });
-    const side = [0, 0, 0.5, 0.5, 0.55, 0.6][i];
+    // From power 3 a quarter of the punch moves into the angled bubbles: less on one small
+    // target than the other guns, more across a crowd, about par on something boss-sized.
+    const side = [0, 0, 0.3, 0.4, 0.27, 0.3][i];
+    const core = ((r >= 3 ? [0, 0, 12, 15, 18, 22][i] : dps) * cd) / 2;
+    add({ ox: -7, vx: 0, vy: -780, dmg: core, r: 3 + i * 0.25 });
+    add({ ox: 7, vx: 0, vy: -780, dmg: core, r: 3 + i * 0.25 });
     const angles = r >= 5 ? [0.15, 0.32] : r >= 3 ? [0.17] : [];
     for (const a0 of angles) {
       const a = a0 * tight;
       for (const dir of [-1, 1]) {
-        add({ ox: dir * 12, vx: Math.sin(a) * 700 * dir, vy: -Math.cos(a) * 700, dmg: side, style: 1, r: 2 });
+        add({ ox: dir * 12, vx: Math.sin(a) * 700 * dir, vy: -Math.cos(a) * 700, dmg: side, r: 2.6 });
       }
     }
   }
-  return { shots, cd: 0.125 };
+  return { shots, cd };
 }
 
 /** Orbiting pods: one from rank 4, two at rank 6 (matches what is drawn). */
@@ -457,16 +546,35 @@ export function podCount(rank: number) {
   return rank >= 6 ? 2 : rank >= 4 ? 1 : 0;
 }
 
-export const FAMILIES: GunFamily[] = ["pulse", "neutron", "lance"];
+export const FAMILIES: GunFamily[] = ["bubble", "soap", "paste", "zap", "flush", "mist"];
+
+const FAMILY_INFO: Record<GunFamily, { name: string; color: string; blurb: string }> = {
+  bubble: { name: "BUBBLE BLASTER", color: "#4fd6e8", blurb: "Quick bubbles in a widening fan." },
+  soap: { name: "SOAP CANNON", color: "#f28c1c", blurb: "Heavy bars that burst and splash." },
+  paste: { name: "TOOTHPASTE LASER", color: "#e9463f", blurb: "Thin streaks straight through a column." },
+  zap: { name: "ZAP BRUSH", color: "#f5d21c", blurb: "Bolts that jump from critter to critter." },
+  flush: { name: "FLUSH WAVE", color: "#3f7fe0", blurb: "Wide waves that wash through everything." },
+  mist: { name: "FRESHENER MIST", color: "#7fd38a", blurb: "Weak from afar, half as strong again up close." },
+};
 
 export function familyColor(f: GunFamily) {
-  if (f === "neutron") return "#9ed24a";
-  if (f === "lance") return "#e07a3d";
-  return "#7eb6d6";
+  return (FAMILY_INFO[f] ?? FAMILY_INFO.bubble).color;
+}
+
+export function familyBlurb(f: GunFamily) {
+  return (FAMILY_INFO[f] ?? FAMILY_INFO.bubble).blurb;
 }
 
 export function familyName(f: GunFamily, rank: number, hot: boolean) {
-  return `${f.toUpperCase()} ${rank}${hot ? " HOT" : ""}`;
+  return `${(FAMILY_INFO[f] ?? FAMILY_INFO.bubble).name} ${rank}${hot ? " HOT" : ""}`;
+}
+
+/** Reads a gun family out of a save file, including the three names used before the Toilet Empire. */
+export function familyFrom(raw: unknown): GunFamily | undefined {
+  if (raw === "pulse") return "bubble";
+  if (raw === "neutron") return "soap";
+  if (raw === "lance") return "paste";
+  return FAMILIES.includes(raw as GunFamily) ? (raw as GunFamily) : undefined;
 }
 
 export const DEATH = [
@@ -474,14 +582,14 @@ export const DEATH = [
   "The poop won this round.",
   "Your ship has been returned to sender.",
   "Insurance does not cover this.",
-  "Somewhere, a moon pug is laughing.",
+  "Somewhere, a toilet brush is laughing.",
   "That was a learning experience. Mostly for them.",
   "You flew bravely. Then you flew into that.",
   "The hangar crew has seen worse. Not much worse.",
-  "Even the jellyfish felt bad about it.",
+  "Even the bath sponge felt bad about it.",
   "Next time, consider dodging.",
   "Your flight recorder just says \"oh no\".",
-  "The critters are writing a song about this.",
+  "The plungers are writing a song about this.",
   "Technically, you were hit by lunch.",
   "Mission status: extremely splattered.",
   "They'll name a crater after you. A small one.",
@@ -495,12 +603,13 @@ export const DEATH = [
 export const TIPS = [
   "Tip: Shift shows your real hitbox. You're smaller than you look.",
   "Tip: Grazing a golden nugget pays. Getting hit by one does not.",
-  "Tip: The gift box changes color while it falls. Wait for yours.",
+  "Tip: A gift with your own gun on it powers it up. Any other gift swaps guns and keeps the power.",
   "Tip: Every kill charges your next bomb. Watch the bar by the bomb boxes.",
   "Tip: Fart clouds don't hurt. They just push. Like your aunt.",
   "Tip: Not using bombs pays extra. Being brave has a price tag.",
-  "Tip: LANCE goes through armor. Forge Bots hate that.",
-  "Tip: NEUTRON breaks up healing clouds. Clouds hate that.",
+  "Tip: TOOTHPASTE LASER goes through lids and armor. Pot Lid Knights hate that.",
+  "Tip: SOAP CANNON breaks up healing clouds. Clouds hate that.",
+  "Tip: FRESHENER MIST fades with distance. Get close, then regret it.",
   "Tip: Press F to toggle auto fire. Respect is optional.",
   "Tip: The rubber duck stops time. Nobody knows why. Don't ask.",
 ];
@@ -519,52 +628,54 @@ export const LAST_WORDS = [
 export const BOMB_LINES = ["FRESH!", "LAVENDER STRIKE", "SPRING MEADOW", "PINE FOREST", "OCEAN BREEZE", "NEW CAR SMELL"];
 
 export const BOSS_LINES = [
-  ["COMET REGENT", "Rules the nebula. Has never paid rent."],
-  ["ION ADMIRAL", "Twelve medals. All for attendance."],
-  ["DUNE MAW", "Mostly mouth. Some regrets."],
-  ["MOON EYE", "It has seen things. Now it sees you."],
-  ["OCHRE WHALE", "Swallowed a fleet once. Still peckish."],
-  ["NIMBUS QUEEN", "Royal, fluffy, and deeply unpleasant."],
-  ["BONE COMET", "Died years ago. Refused to stop."],
-  ["FORGE SQUID", "Six arms. Six guns. Zero chill."],
-  ["THUNDER JELLY", "Shocking. Every single time."],
-  ["ECLIPSE IDOL", "The Black Watch's final answer. It's a weird answer."],
+  ["ARMORED CISTERN", "Forty litres of grudge. Do not jiggle the handle."],
+  ["TWIN CISTERN", "Two tanks, one pressure gauge, zero patience."],
+  ["ROBO-VACUUM OVERLORD", "It mapped your whole flat. Then it got ideas."],
+  ["UNDER-THE-BED MONSTER", "You were right to check. Every single night."],
+  ["FRIDGE TITAN", "Something in the back has been there since March."],
+  ["DRAIN HYDRA", "Cut off one pipe and the plumber bills you for two."],
+  ["MEDICINE CABINET MIMIC", "Take two shots and call nobody in the morning."],
+  ["KITCHEN SQUID", "Eight arms. Eight pans. Zero Michelin stars."],
+  ["JANITOR MECH", "Wet floor. Wetter consequences."],
+  ["THE TOILET KING", "Long may he flush."],
 ];
 
 export const CREDITS = [
-  "No critters were harmed. Several were exploded.",
+  "No bathrooms were harmed. Several were exploded.",
   "The poop was 100% vector-based and locally sourced.",
-  "Special thanks to the moon pug for filing so many complaints.",
-  "The Black Watch is broken. The toilet remains.",
+  "Special thanks to the plumber, who saw everything and said nothing.",
+  "The Toilet Empire has fallen. Somebody still has to clean up.",
   "Thanks for playing. Please wash your hands.",
   "IT WAS A TOILET THE WHOLE TIME.",
 ];
 
-export const GUIDE: { id: string; name: string; line: string }[] = [
-  { id: "dart", name: "Dart", line: "One hit. Zero dignity." },
-  { id: "wedge", name: "Wedge", line: "Flies in a mood." },
-  { id: "drone", name: "Drone", line: "Small, loud, employed." },
-  { id: "cruiser", name: "Cruiser", line: "Has a name. Had a pension." },
-  { id: "gnat", name: "Glass Gnat", line: "Dies into three smaller regrets." },
-  { id: "hermit", name: "Rock Hermit", line: "Only rude when it comes outside." },
-  { id: "moth", name: "Orbit Moth", line: "Dating a gravity well." },
-  { id: "honey", name: "Honey Turret", line: "Makes friends immortal. Rude friends." },
-  { id: "mother", name: "Spore Mother", line: "Her kids are slow and numerous." },
-  { id: "ghost", name: "Phase Ghost", line: "You can only hit the part that showed up." },
-  { id: "forge", name: "Forge Bot", line: "The plate is the personality." },
-  { id: "spark", name: "Spark Twin", line: "Kill one. The lightning files for divorce." },
-  { id: "watcher", name: "Watcher", line: "Copies your gun. Badly. On purpose." },
-  { id: "boss", name: "Boss", line: "Three moods. All of them aimed." },
-  { id: "swirl", name: "Classic Swirl", line: "The house brown." },
-  { id: "frozen", name: "Frozen Turd", line: "Cold, then three ice cubes." },
-  { id: "pebble", name: "Pebble Poop", line: "Bounces once. That's the joke." },
-  { id: "honeyblob", name: "Honey Blob", line: "Slow. Sticky. Has a bee." },
-  { id: "slime", name: "Slime Log", line: "Becomes two. Never a good sign." },
-  { id: "ghostpoop", name: "Ghost Poop", line: "See-through. Still counts." },
-  { id: "chili", name: "Chili Bomb", line: "Fast and personally offended." },
-  { id: "zap", name: "Zap Turd", line: "Cannot fly in a straight line." },
-  { id: "gold", name: "Golden Nugget", line: "Graze it for cash. Don't kiss it." },
-  { id: "fart", name: "Fart Cloud", line: "Does not hurt. Does shove." },
+export const GUIDE: { id: string; name: string; line: string; art: string }[] = [
+  { id: "dart", name: "Small Fry", line: "One hit. Zero dignity. They come in lines.", art: "e/toilet_seat_scout" },
+  { id: "wedge", name: "Diver", line: "Flies in a mood, then flies at you.", art: "e/plunger_interceptor" },
+  { id: "drone", name: "Shooter", line: "The ones that actually throw the stuff.", art: "e/toilet_bomber" },
+  { id: "cruiser", name: "Heavy", line: "Has a name. Had a pension. Full of loot.", art: "e/bathtub_barge" },
+  { id: "wall", name: "Sealed Lid", line: "Hides behind a lid. Knock it off first, or go through it.", art: "e/sealed_lid" },
+  { id: "gnat", name: "Cracked Mirror", line: "Seven years of bad luck, in three smaller pieces.", art: "e/cracked_mirror" },
+  { id: "hermit", name: "Bucket Hermit", line: "Only rude when it comes outside.", art: "e/bucket_hermit" },
+  { id: "moth", name: "Lamp Moth", line: "Cannot hold still. Circles its spot in the line.", art: "e/moon_lamp_moth" },
+  { id: "honey", name: "Honey Jar Turret", line: "Makes its friends untouchable. Rude friends.", art: "e/honey_jar_turret" },
+  { id: "mother", name: "Mold Mother", line: "Her kids are slow and numerous.", art: "e/mold_mother" },
+  { id: "ghost", name: "Towel Wraith", line: "You can only hit the part that showed up.", art: "e/towel_wraith" },
+  { id: "forge", name: "Pot Lid Knight", line: "The lid is the personality.", art: "e/pot_lid_knight" },
+  { id: "spark", name: "Salt & Pepper Twins", line: "Seasoned. Electrified. Always two sparks at once.", art: "e/salt_and_pepper_twins" },
+  { id: "watcher", name: "Security Camera", line: "Always watching. Always aiming. Quicker than the rest.", art: "e/security_camera" },
+  { id: "splash", name: "Auto-Flush", line: "Goes out with a splash. Stand back.", art: "e/auto_flush_kamikaze" },
+  { id: "boss", name: "Boss", line: "Three moods. All of them aimed.", art: "b/armored_cistern" },
+  { id: "swirl", name: "Classic Swirl", line: "The house brown. Comes in nine shapes.", art: "p/classic_swirl" },
+  { id: "frozen", name: "Frozen Turd", line: "Cold, then three ice cubes.", art: "p/frozen_turd" },
+  { id: "pebble", name: "Pebble Poop", line: "Bounces once. That's the joke.", art: "p/pebble_poop" },
+  { id: "honeyblob", name: "Honey Blob", line: "Slow. Sticky. Has a bee.", art: "p/honey_blob" },
+  { id: "slime", name: "Slime Log", line: "Becomes two. Never a good sign.", art: "p/slime_log" },
+  { id: "ghostpoop", name: "Ghost Poop", line: "See-through. Still counts.", art: "p/ghost_poop" },
+  { id: "chili", name: "Chili Bomb", line: "Fast and personally offended.", art: "p/chili_bomb" },
+  { id: "zap", name: "Zap Turd", line: "Cannot fly in a straight line.", art: "p/zap_turd" },
+  { id: "gold", name: "Golden Nugget", line: "Graze it for cash. Don't kiss it.", art: "p/golden_nugget" },
+  { id: "fart", name: "Fart Cloud", line: "Does not hurt. Does shove.", art: "p/fart_cloud" },
 ];
 
 export type BossCmd =
