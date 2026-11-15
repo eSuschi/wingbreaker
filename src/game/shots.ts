@@ -59,7 +59,8 @@ function build(art: string): HTMLCanvasElement | null {
   if (!img) return null;
   const w = img.naturalWidth;
   const h = img.naturalHeight;
-  // light outline: the silhouette, stamped around the sprite, filled cream
+  // warning outline: the silhouette, stamped around the sprite, filled hot red-orange.
+  // Everything that can hurt you wears this; everything that helps you floats in a bubble.
   const out = document.createElement("canvas");
   out.width = w + EDGE * 2;
   out.height = h + EDGE * 2;
@@ -70,7 +71,7 @@ function build(art: string): HTMLCanvasElement | null {
     o.drawImage(img, EDGE + Math.cos(a) * EDGE, EDGE + Math.sin(a) * EDGE);
   }
   o.globalCompositeOperation = "source-in";
-  o.fillStyle = "#fff1d6";
+  o.fillStyle = "#ff6a3d";
   o.fillRect(0, 0, out.width, out.height);
   o.globalCompositeOperation = "source-over";
   o.drawImage(img, EDGE, EDGE);
@@ -127,10 +128,7 @@ export function drawHostileShot(
   if (look.alpha) ctx.globalAlpha = look.alpha;
   ctx.drawImage(img, -w / 2, -h / 2, w, h);
   ctx.globalAlpha = 1;
-  if (look.sparkle) {
-    const t = time * 5 + x * 0.1;
-    twinkle(ctx, Math.cos(t) * h * 0.45, -h * 0.3 + Math.sin(t * 1.3) * 3, 3.2 + Math.sin(t * 2) * 1.2, look.sparkle);
-    twinkle(ctx, -Math.cos(t * 0.8) * h * 0.4, h * 0.15, 2.2, look.sparkle);
-  }
+  // Nothing hostile sparkles any more: a golden or diamond shot used to look like loot.
+  void time;
   return true;
 }

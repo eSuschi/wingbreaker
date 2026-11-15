@@ -90,13 +90,26 @@ export function sizeMul(width: number) {
   return Math.max(1, Math.min(1.5, width / 800));
 }
 
+/**
+ * The strongest gun power a gift can raise you to at this point of the campaign.
+ * Gifts used to stack to the top by level 11 and everything melted on entry; now power
+ * comes in steps: 2 until level 11, then one more every twelve levels, 6 from level 48.
+ * A gun bought in the shop still starts above this (see takePickup).
+ */
+export function gunCap(level: number) {
+  return Math.max(2, Math.min(6, 2 + Math.floor(Math.max(1, level) / 12)));
+}
+
 export function enemyBody(kind: VKind, level: number) {
   const { lv } = diff(level);
   const tip = Math.floor(lv / 34);
-  if (kind === "dart") return { hp: 1 + Math.floor(lv / 34), r: 13, score: 70 + lv, vy: 90, cash: 1 + tip };
-  if (kind === "drone") return { hp: 2 + Math.floor(lv / 22), r: 14, score: 110 + lv * 2, vy: 84, cash: 1 + tip };
-  if (kind === "wedge") return { hp: 2 + Math.floor(lv / 15), r: 15, score: 130 + lv * 2, vy: 72, cash: 2 + tip };
-  if (kind === "cruiser") return { hp: 7 + Math.floor(lv / 6), r: 22, score: 260 + lv * 3, vy: 48, cash: 5 + tip };
+  // from level 5 on everything has a little more hull, so a formation takes a few seconds
+  // to take apart instead of popping the moment it flies in
+  const tough = (hp: number) => (lv <= 4 ? hp : Math.ceil(hp * 1.45));
+  if (kind === "dart") return { hp: tough(1 + Math.floor(lv / 34)), r: 13, score: 70 + lv, vy: 90, cash: 1 + tip };
+  if (kind === "drone") return { hp: tough(2 + Math.floor(lv / 22)), r: 14, score: 110 + lv * 2, vy: 84, cash: 1 + tip };
+  if (kind === "wedge") return { hp: tough(2 + Math.floor(lv / 15)), r: 15, score: 130 + lv * 2, vy: 72, cash: 2 + tip };
+  if (kind === "cruiser") return { hp: tough(7 + Math.floor(lv / 6)), r: 22, score: 260 + lv * 3, vy: 48, cash: 5 + tip };
   // Tuned so a typical gun for that point in the campaign clears a boss in
   // roughly 30 s (level 10) to 60 s (level 100) of steady fire.
   const hp = Math.round(300 + lv * 6.5 + lv * lv * 0.075);
@@ -786,6 +799,8 @@ export const TIPS = [
   "Tip: Shift shows your real hitbox. You're smaller than you look.",
   "Tip: Grazing a golden nugget pays. Getting hit by one does not.",
   "Tip: A gift with your own gun on it powers it up. Any other gift swaps guns and keeps the power.",
+  "Tip: Anything in a soap bubble is a gift. Anything with a red-orange outline wants you dead.",
+  "Tip: Gun power comes in steps as you go deeper. A gift at the limit pays cash instead.",
   "Tip: Every kill charges your next bomb. Watch the bar by the bomb boxes.",
   "Tip: Fart clouds don't hurt. They just push. Like your aunt.",
   "Tip: Not using bombs pays extra. Being brave has a price tag.",

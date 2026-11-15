@@ -5,6 +5,21 @@ import { Music } from "./music";
 import { chapterOf, CHAPTERS, DIFFICULTY, FEATS, GUN_PRICE, quipFor, SKINS, UPGRADE_LIST, starTotal, type SkinId, type UpgradeId } from "./meta";
 import { CREDITS, FAMILIES, GUIDE, LOSER_TITLES, TIPS, WINNER_TITLES, daySeed, familyBlurb, familyName, type GunFamily } from "./v3";
 
+/** The picture each shop upgrade wears, all from the pickup art the pilot already knows. */
+const UPGRADE_ART: Record<string, string> = {
+  wings: "winged_heart",
+  capacitor: "silver_star",
+  trigger: "coffee",
+  luck: "golden_toilet_seat",
+  magnet: "magnet",
+  salvage: "gold_coin",
+  magazine: "air_freshener",
+  salvo: "plunger_missile_pickup",
+  hull: "shield_bubble",
+  insurance: "toilet_paper",
+  pockets: "bath_bomb_pickup",
+};
+
 const GIFT_ART: Record<GunFamily, string> = {
   bubble: "bubble_blaster",
   soap: "soap_cannon",
@@ -1042,15 +1057,23 @@ export function Wingbreaker() {
                 <button
                   key={item.id}
                   type="button"
-                  className={row}
+                  className={`${row} h-auto min-h-[68px] py-2`}
                   disabled={maxed || ui.dollars < price}
                   onClick={() => act((w) => purchaseUpgrade(w, item.id))}
                 >
-                  <span>
-                    <span className="block">{item.name}</span>
-                    <span className="block text-xs tracking-normal text-muted">{item.blurb}</span>
+                  <span className="flex min-w-0 items-center gap-3">
+                    {UPGRADE_ART[item.id] && <img src={`/art/k/${UPGRADE_ART[item.id]}.webp`} alt="" className="h-9 w-9 shrink-0 object-contain" />}
+                    <span className="min-w-0">
+                      <span className="block">{item.name}</span>
+                      <span className="block text-xs tracking-normal text-muted">{item.blurb}</span>
+                      <span className="mt-1 flex gap-1" aria-hidden="true">
+                        {Array.from({ length: item.max }, (_, i) => (
+                          <span key={i} className={`h-1.5 w-5 ${i < rank ? "bg-ember" : "bg-line"}`} />
+                        ))}
+                      </span>
+                    </span>
                   </span>
-                  <span className="text-sm text-ember">{maxed ? "MAX" : `$${price}`}</span>
+                  <span className="shrink-0 text-sm text-ember">{maxed ? "MAX" : `$${price}`}</span>
                 </button>
               );
             })}

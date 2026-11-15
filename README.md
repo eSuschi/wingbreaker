@@ -46,7 +46,8 @@ Shoot everything. Don't get hit. Catch the gifts.
 ### What falls from the sky
 
 - **Poop** in various shapes and colours: bad. Dodge it.
-- **Gift box**: a gun. The picture on it says which. Your own gun on the box means a power-up; any other box swaps guns and keeps your power.
+- **Anything in a soap bubble is a gift**; enemy shots never are, and wear a red-orange outline instead.
+- **Gift box**: a gun. The picture on it says which. Your own gun on the box means a power-up; any other box swaps guns and keeps your power. Power comes in steps as you go deeper (2 until level 11, one more every twelve levels, full from level 48); a gift at the limit pays cash instead.
 - **Ammo crate**: plunger missiles, bath bombs or paper rolls for the second weapon.
 - **Shield bubble**: eats one hit.
 - **Spray can**: one more bomb.

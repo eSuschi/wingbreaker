@@ -1775,6 +1775,38 @@ function drawPickup(ctx: CanvasRenderingContext2D, kind: string, x: number, y: n
     drawStar(ctx, Math.cos(a) * reach * 0.78, Math.sin(a) * reach * 0.78, 3.4, "#ffffff");
     drawStar(ctx, Math.cos(a + 2.6) * reach * 0.7, Math.sin(a + 2.6) * reach * 0.7, 2.4, tone);
   }
+  // Every gift floats in a soap bubble. Enemy shots have a hot red-orange outline and
+  // never a bubble, so "inside a bubble" always means "pick it up".
+  {
+    ctx.translate(Math.sin(time * 2.1 + x * 0.05) * 3, 0);
+    const k = small ? 0.9 : 1;
+    const rad = (power ? 23 : kind === "$" ? 14 : 16.5) * k;
+    const body = ctx.createRadialGradient(-rad * 0.32, -rad * 0.38, rad * 0.08, 0, 0, rad);
+    body.addColorStop(0, "rgba(255,255,255,0.5)");
+    body.addColorStop(0.6, "rgba(210,238,255,0.12)");
+    body.addColorStop(1, "rgba(150,215,255,0.34)");
+    ctx.fillStyle = body;
+    ctx.beginPath();
+    ctx.arc(0, 0, rad, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = "rgba(255,255,255,0.92)";
+    ctx.lineWidth = power ? 2.2 : 1.6;
+    ctx.stroke();
+    if (power) {
+      // a slow ring of the gift's own colour breathes outwards from the bubble
+      const t = (time * 0.9 + x * 0.01) % 1;
+      ctx.strokeStyle = tone + Math.round((1 - t) * 150).toString(16).padStart(2, "0");
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(0, 0, rad + 2 + t * 10, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+    ctx.strokeStyle = "rgba(255,255,255,0.95)";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(0, 0, rad * 0.74, Math.PI * 1.08, Math.PI * 1.42);
+    ctx.stroke();
+  }
   const iconPath = pickupArt(kind, hue);
   const icon = iconPath ? art(iconPath) : null;
   if (iconPath && icon) {

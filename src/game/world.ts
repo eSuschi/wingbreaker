@@ -46,6 +46,7 @@ import {
   aimedShare,
   fastKillLimit,
   fireBudget,
+  gunCap,
   sizeMul,
   volleySize,
   mayShoot,
@@ -1611,6 +1612,12 @@ function chargeBomb(w: World, amount: number) {
   }
 }
 
+/** The highest power a gift can raise a gun to right now (a shop gun that starts higher keeps its power). */
+function weaponCap(w: World) {
+  const kit = w.arcade ? 1 : loadoutOf(w.meta).weapon;
+  return Math.max(gunCap(w.level), kit);
+}
+
 function takePickup(w: World, kind: PickupKind, value: number, who: Player = w.player) {
   const p = who;
   if (kind === "W") {
@@ -1620,14 +1627,19 @@ function takePickup(w: World, kind: PickupKind, value: number, who: Player = w.p
       p.family = family;
       w.cues.push("pickup");
       float(w, p.x, p.y - 28, gunName(p.weapon, p.family), true);
-    } else if (p.weapon < 6) {
+    } else if (p.weapon < weaponCap(w)) {
       p.weapon += 1;
       w.cues.push("pickup");
       float(w, p.x, p.y - 28, gunName(p.weapon, p.family), true);
-    } else {
+    } else if (p.weapon >= 6) {
       p.feed = 6.5;
       w.cues.push("drive");
       float(w, p.x, p.y - 28, "AFTERBURNER", true);
+    } else {
+      // power comes in steps through the campaign: a gift at the limit pays out instead
+      bank(w, 10 + Math.round(w.level * 0.5), p.x, p.y, true);
+      w.cues.push("pickup");
+      float(w, p.x, p.y - 28, "GUN AT ITS LIMIT HERE – CASH", true);
     }
     note(w, `gun_${p.family}`);
     cheer(w, p.x, p.y, familyColor(family));
@@ -1705,7 +1717,9 @@ function dropPickup(w: World, kind: PickupKind, x: number, y: number, value = 0)
   let hue: number | undefined;
   if (kind === "W") {
     const mine = FAMILIES.indexOf(nearestPilot(w, x, y).family);
-    hue = w.rng() < 0.55 ? Math.max(0, mine) : Math.floor(w.rng() * FAMILIES.length);
+    // a gun already at the limit gets a different family to try, never a gift that would do nothing
+    const full = nearestPilot(w, x, y).weapon >= weaponCap(w);
+    hue = !full && w.rng() < 0.55 ? Math.max(0, mine) : Math.floor(w.rng() * FAMILIES.length);
   } else if (kind === "M" || kind === "F") hue = Math.floor(w.rng() * 3);
   // food keeps its cash value; for gifts and crates the value says which one it is
   w.pickups.push({ kind, x, y, vx: dir * (12 + w.rng() * 16), vy: 70 + w.rng() * 40, value: kind === "F" ? value : (hue ?? value), rest: 0, hue });
@@ -3297,8 +3311,8 @@ function finishLevel(w: World) {
     w.score += 150;
     if (w.arcade) w.purse += 50;
     else w.meta.dollars += 100;
-    if (w.player.weapon < 6) w.player.weapon += 1;
-    else w.player.feed = 6.5;
+    if (w.player.weapon < weaponCap(w)) w.player.weapon += 1;
+    else if (w.player.weapon >= 6) w.player.feed = 6.5;
   } else if (!boss && slot === 5) {
     w.banner = `${w.slain}/${w.born}`;
   }
