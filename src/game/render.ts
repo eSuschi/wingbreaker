@@ -1,7 +1,8 @@
 import { bossArt, lookId, lookName } from "./army";
 import { CHAPTERS, chapterIndex, chapterOf, gunName, skinDef, type SkinDef } from "./meta";
-import { BOSS_LINES, HONEY_RING, MIST_LIFE, STYLE, bossPhases, familyColor, type VHazard } from "./v3";
+import { BOOST_TIME, BOSS_LINES, HONEY_RING, MIST_LIFE, STYLE, bossPhases, familyColor, type VHazard } from "./v3";
 import { drawBossCreature, drawCritter, drawLoot } from "./critters";
+import { drawSpecialPuff, drawSpecialShot } from "./guns";
 import { drawHostileShot, drawStar } from "./shots";
 import {
   DASH_WARN,
@@ -12,6 +13,7 @@ import {
   STRIKE_TIME,
   hermitHidden,
   podOffsets,
+  gunRank,
   WORLD_H,
   WORLD_W,
   type Bullet,
@@ -172,7 +174,8 @@ export function drawWorld(ctx: CanvasRenderingContext2D, w: World, focus: boolea
     ctx.fillStyle = "rgba(0,0,0,0.72)";
     ctx.fillRect(-20, -20, WORLD_W + 40, WORLD_H + 40);
   }
-  for (const pk of w.pickups) drawPickup(ctx, pk.kind, pk.x, pk.y, w.time, pk.hue ?? 0);
+  // a gun gift with no gun on it (the campaign's) is the plain power box
+  for (const pk of w.pickups) drawPickup(ctx, pk.kind, pk.x, pk.y, w.time, pk.hue ?? (pk.kind === "W" ? -1 : 0));
   for (const e of w.enemies) drawEnemy(ctx, e, w.time, w.player.x, w.player.y);
   for (const p of w.pops) drawPop(ctx, p);
 
@@ -269,7 +272,7 @@ export function drawWorld(ctx: CanvasRenderingContext2D, w: World, focus: boolea
 
   if (w.duel) {
     if (w.mode === "play" || w.mode === "pause" || w.mode === "duelover") drawDuelHud(ctx, w);
-  } else if (w.mode === "play" || w.mode === "pause" || w.mode === "bridge" || w.mode === "clear" || w.mode === "over" || w.mode === "victory") drawHud(ctx, w);
+  } else if (!w.range && (w.mode === "play" || w.mode === "pause" || w.mode === "bridge" || w.mode === "clear" || w.mode === "over" || w.mode === "victory")) drawHud(ctx, w);
 }
 
 /** A pseudo-random number in 0..1 that is always the same for the same pair. */
@@ -726,14 +729,28 @@ function drawHud(ctx: CanvasRenderingContext2D, w: World) {
   ctx.textAlign = "center";
   ctx.fillStyle = w.player.feed > 0 ? EMBER : STEEL_DIM;
   ctx.font = "600 13px Barlow Condensed, sans-serif";
-  ctx.fillText(gunName(w.player.weapon, w.player.family), WORLD_W / 2, by - (w.wing ? 16 : 8));
+  ctx.fillText(gunName(gunRank(w.player), w.player.family), WORLD_W / 2, by - (w.wing ? 16 : 8));
   ctx.textAlign = "left";
   const seg = bw / 6;
   const gunColor = familyColor(w.player.family);
-  for (let i = 0; i < 6; i++) {
-    ctx.fillStyle = i < w.player.weapon ? (w.player.feed > 0 ? EMBER : gunColor) : "#1a2128";
-    ctx.fillRect(bx + i * seg + 1, by, seg - 3, 3);
-  }
+  // power bought in the shop in the gun's colour; a gift boost on top of it in gold, and it blinks out
+  const powerBar = (p: Player, y: number, h: number, color: string) => {
+    const rank = gunRank(p);
+    const ending = p.boostT > 0 && p.boostT < 5 && Math.sin(w.time * 14) > 0;
+    for (let i = 0; i < 6; i++) {
+      const lent = i >= p.weapon && i < rank;
+      ctx.fillStyle = i < rank ? (p.feed > 0 ? EMBER : lent ? (ending ? "#7a6420" : "#ffd84a") : color) : "#1a2128";
+      ctx.fillRect(bx + i * seg + 1, y, seg - 3, h);
+    }
+    if (p.boostT > 0 && rank > p.weapon) {
+      // how long the gift still lasts: a thin line under the lent steps
+      const x0 = bx + p.weapon * seg + 1;
+      const full = (rank - p.weapon) * seg - 3;
+      ctx.fillStyle = "#ffd84a";
+      ctx.fillRect(x0, y + h + 1, full * Math.min(1, p.boostT / BOOST_TIME), 1);
+    }
+  };
+  powerBar(w.player, by, 3, gunColor);
   const lift = w.touch ? 78 : 0;
   // bomb charge: fills with every kill, a full bar hands over a bomb
   const chargeW = 53;
@@ -744,11 +761,7 @@ function drawHud(ctx: CanvasRenderingContext2D, w: World) {
   ctx.fillRect(chargeX, by - 9 - lift, chargeW * Math.min(1, w.snacks / 100), 3);
 
   if (w.wing) {
-    const y2 = by - 8;
-    for (let i = 0; i < 6; i++) {
-      ctx.fillStyle = i < w.wing.weapon ? (w.wing.feed > 0 ? EMBER : "#d7c4a1") : "#1a2128";
-      ctx.fillRect(bx + i * seg + 1, y2, seg - 3, 2);
-    }
+    powerBar(w.wing, by - 8, 2, "#d7c4a1");
   }
 
   for (let i = 0; i < 5; i++) {
@@ -986,7 +999,7 @@ function drawPlayer(ctx: CanvasRenderingContext2D, w: World, p: Player, focus: b
     const tail = img ? (img.naturalHeight * (46 / Math.sqrt(img.naturalWidth * img.naturalHeight))) / 2 - 7 : 16;
     flame(ctx, -6, tail, flick * 7);
     flame(ctx, 6, tail, flick * 7);
-    if (p.weapon >= 3) {
+    if (gunRank(p) >= 3) {
       flame(ctx, -14, tail - 3, flick * 4);
       flame(ctx, 14, tail - 3, flick * 4);
     }
@@ -1096,7 +1109,7 @@ function drawPlayer(ctx: CanvasRenderingContext2D, w: World, p: Player, focus: b
       ctx.stroke();
       ctx.setLineDash([]);
     }
-    for (const pod of podOffsets(w.time, p.weapon)) {
+    for (const pod of podOffsets(w.time, gunRank(p))) {
       ctx.save();
       ctx.translate(pod.x, pod.y);
       ctx.fillStyle = feed ? "#ffb07a" : "#d5e8f4";
@@ -1112,7 +1125,8 @@ function drawPlayer(ctx: CanvasRenderingContext2D, w: World, p: Player, focus: b
 
     if (p.muzzle > 0) {
       ctx.globalAlpha = Math.min(1, p.muzzle / 0.05);
-      const flash = p.weapon >= 6 ? "#fff4ea" : p.weapon === 5 ? "#e7ffb0" : p.weapon === 4 ? "#ffd7a8" : "#f4fbff";
+      const rank = gunRank(p);
+      const flash = rank >= 6 ? "#fff4ea" : rank === 5 ? "#e7ffb0" : rank === 4 ? "#ffd7a8" : "#f4fbff";
       ctx.fillStyle = flash;
       ctx.beginPath();
       ctx.moveTo(0, -34);
@@ -1411,6 +1425,8 @@ function drawShot(ctx: CanvasRenderingContext2D, b: Bullet, time: number, team?:
       ctx.ellipse(0, 0, size * 0.25, size * 0.5, 0, 0, Math.PI * 2);
       ctx.fill();
     }
+  } else if (style >= 20 && drawSpecialShot(ctx, style, b, time)) {
+    // one of the six newer guns: painted in guns.ts
   } else if (style === STYLE.plunger || b.homing) {
     ctx.rotate(heading);
     const img = art("g/plunger_missile_projectile");
@@ -1461,7 +1477,9 @@ function drawPuffs(ctx: CanvasRenderingContext2D, w: World) {
     const family = SHOT_ART[p.style];
     const img = family ? art(`g/${family}_impact`) : null;
     if (img) blitLong(ctx, img, p.size * grow);
-    else if (p.style === STYLE.bathBomb) {
+    else if (p.style >= 20 && drawSpecialPuff(ctx, p.style, p.size, left, p.x)) {
+      // painted in guns.ts
+    } else if (p.style === STYLE.bathBomb) {
       // foam: a cluster of bubbles blowing outward
       for (let i = 0; i < 9; i++) {
         const a = i * 2.4 + p.x * 0.01;
@@ -1737,7 +1755,7 @@ const AMMO = ["plunger_missile", "bath_bomb", "paper_roll"];
 
 /** The picture a pickup wears. A gift box shows the gun family inside, an ammo crate its kind. */
 function pickupArt(kind: string, hue: number) {
-  if (kind === "W") return `k/${GIFTS[((hue % GIFTS.length) + GIFTS.length) % GIFTS.length]}_gift`;
+  if (kind === "W") return hue < 0 ? "k/gift_orange" : `k/${GIFTS[((hue % GIFTS.length) + GIFTS.length) % GIFTS.length]}_gift`;
   if (kind === "M") return `k/${AMMO[((hue % AMMO.length) + AMMO.length) % AMMO.length]}_pickup`;
   if (kind === "S") return "k/shield_bubble";
   if (kind === "B") return "k/air_freshener";
@@ -1756,7 +1774,7 @@ function drawPickup(ctx: CanvasRenderingContext2D, kind: string, x: number, y: n
   ctx.save();
   ctx.translate(x, y);
   const small = WORLD_W < 560;
-  const gift = hue === 1 ? "#9ed24a" : hue === 2 ? "#e07a3d" : "#7eb6d6";
+  const gift = hue < 0 ? "#ffb347" : hue === 1 ? "#9ed24a" : hue === 2 ? "#e07a3d" : "#7eb6d6";
   const tone = kind === "W" ? gift : kind === "S" ? "#bfe3f5" : kind === "B" ? "#9ed24a" : kind === "D" ? "#f2d24a" : kind === "M" ? "#ff8f6b" : "#e2b84a";
   const power = kind !== "$" && kind !== "F";
   if (power) {

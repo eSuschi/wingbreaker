@@ -2,32 +2,10 @@ import { useEffect, useRef, useState } from "react";
 import { DollarSign } from "lucide-react";
 import { Sfx } from "./audio";
 import { Music } from "./music";
-import { chapterOf, CHAPTERS, DIFFICULTY, FEATS, GUN_PRICE, quipFor, SKINS, UPGRADE_LIST, starTotal, type SkinId, type UpgradeId } from "./meta";
-import { CREDITS, FAMILIES, GUIDE, LOSER_TITLES, TIPS, WINNER_TITLES, daySeed, familyBlurb, familyName, type GunFamily } from "./v3";
+import { chapterOf, CHAPTERS, DIFFICULTY, FEATS, quipFor, starTotal, type SkinId, type UpgradeId } from "./meta";
+import { Shop } from "./Shop";
+import { CREDITS, GUIDE, LOSER_TITLES, TIPS, WINNER_TITLES, daySeed, type GunFamily } from "./v3";
 
-/** The picture each shop upgrade wears, all from the pickup art the pilot already knows. */
-const UPGRADE_ART: Record<string, string> = {
-  wings: "winged_heart",
-  capacitor: "silver_star",
-  trigger: "coffee",
-  luck: "golden_toilet_seat",
-  magnet: "magnet",
-  salvage: "gold_coin",
-  magazine: "air_freshener",
-  salvo: "plunger_missile_pickup",
-  hull: "shield_bubble",
-  insurance: "toilet_paper",
-  pockets: "bath_bomb_pickup",
-};
-
-const GIFT_ART: Record<GunFamily, string> = {
-  bubble: "bubble_blaster",
-  soap: "soap_cannon",
-  paste: "toothpaste_laser",
-  zap: "zap_brush",
-  flush: "flush_wave",
-  mist: "freshener_mist",
-};
 import { ACTIONS, codeLabel, DEFAULT_BINDS, loadBinds, saveBinds, type Action, type Binds } from "./controls";
 import { drawWorld } from "./render";
 import {
@@ -59,6 +37,8 @@ import {
   setSfx,
   setCrew,
   purchaseGun,
+  purchasePower,
+  gunRank,
   step,
   fitWorld,
   newMission,
@@ -111,6 +91,8 @@ type Ui = {
   starsGrid: number[];
   ranks: { name: string; score: number; stage: number; date: string }[];
   gun: GunFamily;
+  gun2: GunFamily;
+  power: number;
   guns: GunFamily[];
   arcadeStage: number;
   dailyPlayed: boolean;
@@ -165,6 +147,8 @@ function readUi(world: World, muted: boolean): Ui {
     starsGrid: world.meta.stars.slice(),
     ranks: world.meta.ranks.map((r) => ({ name: r.name, score: r.score, stage: r.stage, date: r.date })),
     gun: world.meta.gun,
+    gun2: world.meta.gun2 ?? world.meta.gun,
+    power: world.meta.power ?? 0,
     guns: world.meta.guns.slice(),
     arcadeStage: world.arcadeStage,
     dailyPlayed: world.meta.dailyDay === daySeed().key && world.meta.dailyScore > 0,
@@ -247,7 +231,7 @@ export function Wingbreaker() {
     skin: "steel",
     skin2: "bone",
     owned: ["steel"],
-    upgrades: { hull: 0, magazine: 0, capacitor: 0, magnet: 0, salvage: 0, trigger: 0, wings: 0, luck: 0, salvo: 0, insurance: 0, pockets: 0 },
+    upgrades: { hull: 0, magazine: 0, magnet: 0, salvage: 0, trigger: 0, luck: 0, salvo: 0, insurance: 0, pockets: 0 },
     cleared: false,
     lockShake: false,
     quip: quipFor(1),
@@ -266,6 +250,8 @@ export function Wingbreaker() {
     starsGrid: [],
     ranks: [],
     gun: "bubble",
+    gun2: "bubble",
+    power: 0,
     guns: ["bubble"],
     arcadeStage: 0,
     dailyPlayed: false,
@@ -742,7 +728,7 @@ export function Wingbreaker() {
         steps += 1;
       }
       if (shotGate === 1) {
-        sfx.shot(world.player.weapon, world.player.feed > 0, world.player.x / WORLD_W * 2 - 1, world.player.family);
+        sfx.shot(gunRank(world.player), world.player.feed > 0, world.player.x / WORLD_W * 2 - 1, world.player.family);
         shotGate = 0;
       }
       let killed = false;
@@ -1044,117 +1030,25 @@ export function Wingbreaker() {
       )}
 
       {ui.mode === "shop" && (
-        <div className="absolute inset-0 z-20 overflow-y-auto bg-bg/80">
-          <div className="mx-auto flex w-[min(92vw,480px)] flex-col gap-3 px-5 py-16">
-            <p className="font-display text-sm tracking-[0.28em] text-muted">HANGAR</p>
-            <h2 className="font-display text-4xl tracking-wide">SHOP</h2>
-            <p className="text-sm text-muted">Upgrades come in next level. Cash stays when you die.</p>
-            {UPGRADE_LIST.map((item) => {
-              const rank = ui.upgrades[item.id];
-              const maxed = rank >= item.max;
-              const price = item.prices[Math.min(rank, item.prices.length - 1)];
-              return (
-                <button
-                  key={item.id}
-                  type="button"
-                  className={`${row} h-auto min-h-[68px] py-2`}
-                  disabled={maxed || ui.dollars < price}
-                  onClick={() => act((w) => purchaseUpgrade(w, item.id))}
-                >
-                  <span className="flex min-w-0 items-center gap-3">
-                    {UPGRADE_ART[item.id] && <img src={`/art/k/${UPGRADE_ART[item.id]}.webp`} alt="" className="h-9 w-9 shrink-0 object-contain" />}
-                    <span className="min-w-0">
-                      <span className="block">{item.name}</span>
-                      <span className="block text-xs tracking-normal text-muted">{item.blurb}</span>
-                      <span className="mt-1 flex gap-1" aria-hidden="true">
-                        {Array.from({ length: item.max }, (_, i) => (
-                          <span key={i} className={`h-1.5 w-5 ${i < rank ? "bg-ember" : "bg-line"}`} />
-                        ))}
-                      </span>
-                    </span>
-                  </span>
-                  <span className="shrink-0 text-sm text-ember">{maxed ? "MAX" : `$${price}`}</span>
-                </button>
-              );
-            })}
-            <p className="mt-3 font-display text-sm tracking-[0.22em] text-muted">STARTING GUN</p>
-            <p className="text-xs text-muted">The gun you take off with. Gifts in the field can still swap it.</p>
-            {FAMILIES.map((family) => {
-              const owned = family === "bubble" || ui.guns.includes(family);
-              const worn = ui.gun === family;
-              return (
-                <button
-                  key={family}
-                  type="button"
-                  className={row}
-                  disabled={!owned && ui.dollars < GUN_PRICE}
-                  onClick={() => act((w) => purchaseGun(w, family))}
-                >
-                  <span className="flex min-w-0 items-center gap-3">
-                    <img src={`/art/k/${GIFT_ART[family]}_gift.webp`} alt="" className="h-8 w-8 shrink-0 object-contain" />
-                    <span className="min-w-0">
-                      <span className="block leading-tight">{familyName(family, 1, false).replace(/ 1$/, "")}</span>
-                      <span className="block truncate text-xs leading-tight text-muted normal-case tracking-normal">{familyBlurb(family)}</span>
-                    </span>
-                  </span>
-                  <span className="shrink-0 text-sm text-ember">{worn ? "EQUIPPED" : owned ? "EQUIP" : `$${GUN_PRICE}`}</span>
-                </button>
-              );
-            })}
-            <p className="mt-3 font-display text-sm tracking-[0.22em] text-muted">HANGAR</p>
-            <p className="text-xs text-muted">Every ship flies differently. Pick one for each pilot.</p>
-            <div className="grid grid-cols-2 gap-2">
-              {([0, 1] as const).map((n) => (
-                <button
-                  key={n}
-                  type="button"
-                  aria-pressed={seat === n}
-                  className={`flex h-10 items-center justify-center gap-2 border font-display text-sm tracking-[0.16em] ${
-                    seat === n ? "border-ember bg-ember/15 text-ember" : "border-line bg-bg/70 text-muted hover:text-ink"
-                  }`}
-                  onClick={() => setSeat(n)}
-                >
-                  <span className="inline-block h-2.5 w-2.5" style={{ background: n === 0 ? "#ff6b4a" : "#35d0c0" }} />
-                  {n === 0 ? "PILOT 1" : "PILOT 2"}
-                </button>
-              ))}
-            </div>
-            <div className="grid grid-cols-1 gap-2">
-              {SKINS.map((skin) => {
-                const owned = ui.owned.includes(skin.id);
-                const worn = (seat === 0 ? ui.skin : ui.skin2) === skin.id;
-                const other = (seat === 0 ? ui.skin2 : ui.skin) === skin.id;
-                const locked = !owned && skin.price <= 0;
-                return (
-                  <button
-                    key={skin.id}
-                    type="button"
-                    className={`flex min-h-[76px] items-center gap-3 border bg-bg/70 px-3 py-2 text-left backdrop-blur-sm disabled:opacity-50 ${
-                      worn ? "border-ember" : "border-line hover:border-ink/50"
-                    }`}
-                    disabled={locked || (!owned && ui.dollars < skin.price)}
-                    onClick={() => act((w) => (owned ? wearSkin(w, skin.id, seat) : purchaseSkin(w, skin.id, seat)))}
-                  >
-                    <img src={`/art/s/${skin.art}.webp`} alt="" className="h-14 w-14 shrink-0 object-contain" />
-                    <span className="min-w-0 flex-1">
-                      <span className="flex items-baseline justify-between gap-2">
-                        <span className="truncate font-display text-base tracking-[0.1em]">{skin.name.toUpperCase()}</span>
-                        <span className="shrink-0 font-display text-sm text-ember">
-                          {worn ? "FLYING" : owned ? "FLY" : locked ? `${skin.stars}★` : `$${skin.price}`}
-                        </span>
-                      </span>
-                      <span className="block text-xs leading-snug text-muted">{skin.trait}</span>
-                      {other && <span className="block text-[11px] leading-snug text-cold">{seat === 0 ? "Pilot 2" : "Pilot 1"} flies this one</span>}
-                    </span>
-                  </button>
-                );
-              })}
-            </div>
-            <button type="button" className={`${row} mt-2`} onClick={() => act((w) => closeOverlay(w))}>
-              <span>BACK</span>
-            </button>
-          </div>
-        </div>
+        <Shop
+          dollars={ui.dollars}
+          power={ui.power}
+          upgrades={ui.upgrades}
+          gun={ui.gun}
+          gun2={ui.gun2}
+          guns={ui.guns}
+          skin={ui.skin}
+          skin2={ui.skin2}
+          owned={ui.owned}
+          level={ui.level}
+          seat={seat}
+          setSeat={setSeat}
+          onPower={() => act((w) => purchasePower(w))}
+          onGun={(family, who) => act((w) => purchaseGun(w, family, who))}
+          onUpgrade={(id) => act((w) => purchaseUpgrade(w, id))}
+          onSkin={(id, mine, who) => act((w) => (mine ? wearSkin(w, id, who) : purchaseSkin(w, id, who)))}
+          onBack={() => act((w) => closeOverlay(w))}
+        />
       )}
 
       {ui.mode === "options" && (

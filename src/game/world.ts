@@ -4,6 +4,7 @@ import {
   buySkin,
   buyUpgrade,
   buyGun,
+  buyPower,
   chapterOf,
   equipSkin,
   claimFeats,
@@ -31,7 +32,10 @@ import {
   levelKind,
   HONEY_RING,
   DEATH,
-  FAMILIES,
+  BOOST_MAX,
+  BOOST_TIME,
+  DRYER_LIFE,
+  DUEL_GUNS,
   STYLE,
   familyColor,
   mistPower,
@@ -46,7 +50,6 @@ import {
   aimedShare,
   fastKillLimit,
   fireBudget,
-  gunCap,
   sizeMul,
   volleySize,
   mayShoot,
@@ -122,6 +125,15 @@ export type Bullet = {
   chain?: number;
   /** 0 small, 1 medium, 2 large: which drawing a player shot wears */
   rank?: number;
+  /** Sponge Bomber: enemy shots it can still soak up, and how many it has */
+  soak?: number;
+  soaked?: number;
+  /** Rubber Slingshot: seconds of squash left after a bounce */
+  squash?: number;
+  /** a number of its own, so the drawing can differ from shot to shot */
+  seed?: number;
+  /** which pull of the trigger it came from */
+  volley?: number;
 };
 
 /** A short-lived picture where a shot landed. */
@@ -193,6 +205,13 @@ export type Enemy = {
   dashX?: number;
   /** boss banners already shown, so each one appears once */
   said?: string[];
+  /** Hair Dryer: how fast it is being blown back up the screen, world pixels a second */
+  push?: number;
+  /** Squeaky Duck: seconds it still moves and shoots at half speed */
+  slow?: number;
+  /** Hair Dryer: the last breath that touched it, and how many of its puffs did */
+  airId?: number;
+  airN?: number;
 };
 
 export type Pickup = { kind: PickupKind; x: number; y: number; vx: number; vy: number; value: number; rest: number; hue?: number; age?: number };
@@ -242,6 +261,9 @@ export type Player = {
   rush: number;
   star: number;
   family: GunFamily;
+  /** gift boost: power steps on top of `weapon`, and the seconds they still last */
+  boost: number;
+  boostT: number;
   splat: number;
   slow: number;
   insured: boolean;
@@ -321,6 +343,9 @@ export type World = {
   stars: { x: number; y: number; z: number; s: number }[];
   rng: () => number;
   pinned: number | null;
+  /** the shop's firing range: a throwaway world that shows a gun at work. Never saved, never cleared, nothing shoots back. */
+  range?: boolean;
+  rangeT?: number;
   starShow: string;
   daily: boolean;
   /** kills this level by pilot and wingman */
@@ -614,10 +639,17 @@ function freshPlayer(): Player {
     rush: 0,
     star: 0,
     family: "bubble",
+    boost: 0,
+    boostT: 0,
     splat: 0,
     slow: 0,
     insured: false,
   };
+}
+
+/** The power a pilot's gun fires at right now: what the shop sold, plus any gift boost still running. */
+export function gunRank(p: Player) {
+  return Math.max(1, Math.min(6, p.weapon + (p.boostT > 0 ? p.boost : 0)));
 }
 
 export function startRun(w: World) {
@@ -644,6 +676,8 @@ function liveSnap(w: World): RunSnap {
 }
 
 export function persist(w: World, run: RunSnap | null) {
+  // the firing range is a second world next to the real one: it must never reach the save
+  if (w.range) return;
   w.meta.best = Math.max(w.meta.best, w.best);
   if (w.pinned != null) w.meta.level = w.pinned;
   w.meta.level = clamp(w.meta.level, 1, LEVELS);
@@ -799,9 +833,18 @@ export function setSfx(w: World, value: number) {
   persist(w, w.snap);
 }
 
-export function purchaseGun(w: World, family: GunFamily) {
-  const result = buyGun(w.meta, family);
+export function purchaseGun(w: World, family: GunFamily, seat: 0 | 1 = 0) {
+  const result = buyGun(w.meta, family, seat);
   if (result === "ok") persist(w, w.snap);
+  return result;
+}
+
+export function purchasePower(w: World) {
+  const result = buyPower(w.meta);
+  if (result === "ok") {
+    bumpSnap(w);
+    persist(w, w.snap);
+  }
   return result;
 }
 
@@ -893,13 +936,19 @@ function parkPlayer(w: World, snap: RunSnap | null) {
   p.x = WORLD_W / 2;
   p.y = Math.max(laneTop(), WORLD_H - 110);
   p.lives = w.arcade ? (snap?.lives ?? 3) : (snap?.lives ?? kit.lives);
-  p.weapon = w.arcade ? (snap?.weapon ?? 1) : (snap?.weapon ?? kit.weapon);
+  // campaign: the power bought in the shop, always. Arcade has no shop: there gifts still build the gun up.
+  p.weapon = w.arcade ? (snap?.weapon ?? 1) : kit.weapon;
+  if (w.arcade && !snap) {
+    p.boost = 0;
+    p.boostT = 0;
+  }
   p.bombs = w.arcade ? (snap?.bombs ?? 2) : (snap?.bombs ?? kit.bombs);
   p.shield = (w.arcade ? false : (snap?.shield ?? false)) || !!ship.shield;
   p.feed = snap?.feed ?? 0;
   p.missiles = w.arcade ? 0 : Math.max(kit.missiles, snap?.missiles ?? 0);
   p.missileCd = 0.4;
-  p.family = w.arcade ? "bubble" : (snap?.family ?? kit.family);
+  // the gun is the one equipped in the shop: nothing in the field changes it
+  p.family = kit.family;
   p.sec = 0;
   p.buddy = 0;
   p.magnet = 0;
@@ -922,7 +971,10 @@ function parkPlayer(w: World, snap: RunSnap | null) {
   w.score = snap?.score ?? 0;
   if (w.coop) {
     const wing = freshPlayer();
-    wing.weapon = snap?.weapon2 ?? p.weapon;
+    wing.weapon = w.arcade ? (snap?.weapon2 ?? p.weapon) : kit.weapon;
+    // a gift boost still running carries into the next level
+    wing.boost = w.wing?.boost ?? 0;
+    wing.boostT = w.wing?.boostT ?? 0;
     const ship2 = skinDef(w.meta.skin2);
     wing.bombs = p.bombs;
     // each pilot's lives follow their own ship
@@ -932,7 +984,7 @@ function parkPlayer(w: World, snap: RunSnap | null) {
     wing.fireCd = 0.2;
     wing.missiles = p.missiles;
     wing.missileCd = 0.55;
-    wing.family = snap?.family2 ?? p.family;
+    wing.family = kit.family2;
     wing.alive = true;
     p.x = WORLD_W * 0.38;
     wing.x = WORLD_W * 0.62;
@@ -958,6 +1010,124 @@ export function startSortie(w: World, snap?: RunSnap | null) {
   if (!w.seed) w.seed = (Math.random() * 1e9) | 0;
   launchLevel(w);
   persist(w, liveSnap(w));
+}
+
+/** Where the firing range keeps its ship and its targets, in world pixels from the top. */
+export const RANGE_TOP = 96;
+export const RANGE_BOTTOM = 420;
+const RANGE_SHIP_Y = 372;
+const RANGE_SLOTS: { dx: number; y: number; kind: Kind }[] = [
+  { dx: -92, y: 236, kind: "dart" },
+  { dx: -46, y: 236, kind: "drone" },
+  { dx: 0, y: 236, kind: "dart" },
+  { dx: 46, y: 236, kind: "drone" },
+  { dx: 92, y: 236, kind: "dart" },
+  { dx: -69, y: 190, kind: "wedge" },
+  { dx: -23, y: 190, kind: "drone" },
+  { dx: 23, y: 190, kind: "drone" },
+  { dx: 69, y: 190, kind: "wedge" },
+  { dx: 0, y: 140, kind: "cruiser" },
+];
+
+/** A second world for the shop's firing range. It reads the save once and never writes it. */
+export function createRange(): World {
+  const w = createWorld(0);
+  w.range = true;
+  return w;
+}
+
+/** Points the range at a gun: which one, at what power, on which ship, against the critters of which room. */
+export function aimRange(w: World, family: GunFamily, rank: number, skin: SkinId, level: number) {
+  if (!w.range) return;
+  // the first level of the room: ordinary waves, and the critters the pilot is about to meet
+  const n = Math.floor((clamp(level, 1, LEVELS) - 1) / 10) * 10 + 1;
+  w.meta.gun = family;
+  w.meta.power = clamp(Math.round(rank), 1, 6) - 1;
+  w.meta.skin = skin;
+  w.meta.crew = "solo";
+  w.meta.upgrades.trigger = 0;
+  w.arcade = false;
+  w.daily = false;
+  w.duel = null;
+  w.pinned = null;
+  w.coop = false;
+  w.wing = null;
+  startSortie(w, { level: n, lives: 9, weapon: 1, bombs: 0, shield: false, score: 0, feed: 0, coop: false, missiles: 0, snacks: 0 });
+  w.god = true;
+  w.spawns = [];
+  w.enemies = [];
+  w.hazards = [];
+  w.pickups = [];
+  w.bullets = [];
+  w.intro = null;
+  w.bossUp = false;
+  w.kind = "waves";
+  w.banner = "";
+  w.bannerT = 0;
+  w.cues = [];
+  w.rangeT = 0;
+  const p = w.player;
+  p.x = WORLD_W / 2;
+  p.y = RANGE_SHIP_Y;
+  p.inv = 0;
+  p.shield = false;
+  p.missiles = 0;
+  p.buddy = 0;
+  p.boost = 0;
+  p.boostT = 0;
+}
+
+/** One step of the firing range: the ship sways and fires, and every target that falls is replaced. */
+export function stepRange(w: World, dt: number) {
+  if (!w.range || w.mode !== "play") return;
+  w.rangeT = (w.rangeT ?? 0) + dt;
+  const t = w.rangeT;
+  const cx = WORLD_W / 2;
+  // keep every slot filled: a fallen target is back a moment later
+  for (const slot of RANGE_SLOTS) {
+    const x = cx + slot.dx;
+    if (w.enemies.some((e) => e.hp > 0 && Math.abs(e.ox - x) < 2 && Math.abs((e.oy ?? 0) - slot.y) < 2)) continue;
+    if (w.pops.some((q) => Math.abs(q.x - x) < 30 && q.life > 0)) continue;
+    spawnEnemy(w, slot.kind, x, "rank", undefined, RANGE_TOP - 40, 0, undefined, slot.y);
+    const e = w.enemies[w.enemies.length - 1];
+    if (e) {
+      e.oy = slot.y;
+      e.y = Math.max(RANGE_TOP - 40, slot.y - 120);
+      // the same small targets on every screen, so the window always holds the whole line-up
+      e.r /= e.size ?? 1;
+      e.size = 1;
+    }
+  }
+  w.formX = 0;
+  w.freeze = 0;
+  // sway left and right, with a pause in the middle, so a gun that bends shows it
+  const phase = t % 6;
+  const left = phase > 1.2 && phase < 2.3;
+  const right = phase > 3.6 && phase < 4.7;
+  const back = Math.abs(w.player.x - cx) > 4 && !left && !right;
+  step(w, dt, {
+    left: left || (back && w.player.x > cx),
+    right: right || (back && w.player.x < cx),
+    up: false,
+    down: false,
+    focus: false,
+    fire: true,
+    bomb: false,
+    pointer: null,
+  });
+  const p = w.player;
+  p.y = RANGE_SHIP_Y;
+  p.x = clamp(p.x, cx - 96, cx + 96);
+  p.alive = true;
+  p.lives = 9;
+  for (const e of w.enemies) {
+    // the oldest targets drift down toward the ship: put them back on their line
+    if (e.t > 12) e.t = 0;
+  }
+  w.cues.length = 0;
+  w.floaters.length = 0;
+  w.bannerT = 0;
+  w.flash = 0;
 }
 
 export function startSolo(w: World) {
@@ -1435,6 +1605,7 @@ function addScore(w: World, base: number, x: number, y: number, show: boolean) {
 }
 
 function bank(w: World, amount: number, x: number, y: number, show: boolean) {
+  if (w.range) return;
   const cart = Math.max(shipOf(w, w.player).cash ?? 1, w.wing ? (shipOf(w, w.wing).cash ?? 1) : 1);
   const n = Math.max(1, Math.round(amount * cart * tuning(w).pay * (w.arcade ? 0.5 : salvageMul(w.meta.upgrades.salvage))));
   if (w.arcade) w.purse += n;
@@ -1526,6 +1697,7 @@ function killEnemy(w: World, e: Enemy) {
       spawnEnemy(w, "dart", e.x, "rain", undefined, e.y, (i - 1) * 40, i, e.y, 0, e.role === "mother" ? "spore" : "chip");
     }
   }
+  if (w.range) return;
   if (e.drop) {
     dropPickup(w, e.drop, e.x, e.y, e.dropValue);
   } else {
@@ -1555,8 +1727,7 @@ function miniLoot(w: World, e: Enemy) {
   ];
   items.forEach((item, i) => {
     const a = Math.PI * (0.1 + (0.8 * i) / (items.length - 1));
-    const hue = item.kind === "W" ? Math.max(0, FAMILIES.indexOf(nearestPilot(w, e.x, e.y).family)) : undefined;
-    w.pickups.push({ kind: item.kind, value: hue ?? item.value, hue, x: e.x, y: e.y + 6, vx: Math.cos(a) * 46, vy: 44 + (i % 3) * 9, rest: 0 });
+    w.pickups.push({ kind: item.kind, value: item.value, x: e.x, y: e.y + 6, vx: Math.cos(a) * 46, vy: 44 + (i % 3) * 9, rest: 0 });
   });
   float(w, e.x, e.y - 40, "LOOT", true);
 }
@@ -1612,37 +1783,37 @@ function chargeBomb(w: World, amount: number) {
   }
 }
 
-/** The highest power a gift can raise a gun to right now (a shop gun that starts higher keeps its power). */
-function weaponCap(w: World) {
-  const kit = w.arcade ? 1 : loadoutOf(w.meta).weapon;
-  return Math.max(gunCap(w.level), kit);
-}
-
 function takePickup(w: World, kind: PickupKind, value: number, who: Player = w.player) {
   const p = who;
   if (kind === "W") {
-    // a gift with your own gun on it powers it up; any other gift swaps guns and keeps the power
-    const family = FAMILIES[(((value || 0) % FAMILIES.length) + FAMILIES.length) % FAMILIES.length] ?? "bubble";
-    if (family !== p.family) {
-      p.family = family;
-      w.cues.push("pickup");
-      float(w, p.x, p.y - 28, gunName(p.weapon, p.family), true);
-    } else if (p.weapon < weaponCap(w)) {
-      p.weapon += 1;
-      w.cues.push("pickup");
-      float(w, p.x, p.y - 28, gunName(p.weapon, p.family), true);
-    } else if (p.weapon >= 6) {
-      p.feed = 6.5;
-      w.cues.push("drive");
-      float(w, p.x, p.y - 28, "AFTERBURNER", true);
+    if (w.arcade) {
+      // no shop in the arcade: there a gift is a power step you keep until you are hit
+      if (p.weapon < 6) {
+        p.weapon += 1;
+        w.cues.push("pickup");
+        float(w, p.x, p.y - 28, gunName(p.weapon, p.family), true);
+      } else {
+        p.feed = 6.5;
+        w.cues.push("drive");
+        float(w, p.x, p.y - 28, "AFTERBURNER", true);
+      }
     } else {
-      // power comes in steps through the campaign: a gift at the limit pays out instead
-      bank(w, 10 + Math.round(w.level * 0.5), p.x, p.y, true);
-      w.cues.push("pickup");
-      float(w, p.x, p.y - 28, "GUN AT ITS LIMIT HERE – CASH", true);
+      // campaign: power is bought in the shop. A gift lends one step more for a while,
+      // two gifts lend two; past that, or at full power, it lights the afterburner.
+      const had = p.boostT > 0 ? p.boost : 0;
+      const room = gunRank(p) < 6 && had < BOOST_MAX;
+      if (room) {
+        p.boost = had + 1;
+        w.cues.push("pickup");
+        float(w, p.x, p.y - 28, `POWER +${p.boost} – ${gunName(Math.min(6, p.weapon + p.boost), p.family)}`, true);
+      } else {
+        p.feed = 6.5;
+        w.cues.push("drive");
+        float(w, p.x, p.y - 28, "AFTERBURNER", true);
+      }
+      p.boostT = BOOST_TIME;
     }
-    note(w, `gun_${p.family}`);
-    cheer(w, p.x, p.y, familyColor(family));
+    cheer(w, p.x, p.y, familyColor(p.family));
   } else if (kind === "S") {
     p.shield = true;
     w.cues.push("pickup");
@@ -1711,16 +1882,12 @@ function takePickup(w: World, kind: PickupKind, value: number, who: Player = w.p
 }
 
 function dropPickup(w: World, kind: PickupKind, x: number, y: number, value = 0) {
+  if (w.range) return;
   const dir = Math.sign(w.player.x - x) || (w.rng() < 0.5 ? -1 : 1);
-  // A gun gift is your own gun a little more than half the time (that is a power-up);
-  // otherwise it is another gun to try. An ammo crate is one of the three second weapons.
+  // A gift box is a power boost for whatever gun you fly; it never swaps the gun.
+  // An ammo crate is one of the three second weapons.
   let hue: number | undefined;
-  if (kind === "W") {
-    const mine = FAMILIES.indexOf(nearestPilot(w, x, y).family);
-    // a gun already at the limit gets a different family to try, never a gift that would do nothing
-    const full = nearestPilot(w, x, y).weapon >= weaponCap(w);
-    hue = !full && w.rng() < 0.55 ? Math.max(0, mine) : Math.floor(w.rng() * FAMILIES.length);
-  } else if (kind === "M" || kind === "F") hue = Math.floor(w.rng() * 3);
+  if (kind === "M" || kind === "F") hue = Math.floor(w.rng() * 3);
   // food keeps its cash value; for gifts and crates the value says which one it is
   w.pickups.push({ kind, x, y, vx: dir * (12 + w.rng() * 16), vy: 70 + w.rng() * 40, value: kind === "F" ? value : (hue ?? value), rest: 0, hue });
 }
@@ -1788,6 +1955,18 @@ function hurtPlayer(w: World, p: Player = w.player) {
     w.cues.push("shield");
     return;
   }
+  if (p.insured) {
+    // Insurance: the first hit of the level is on the house
+    p.insured = false;
+    p.inv = 1.2;
+    burst(w, p.x, p.y, "#f4e7cf", 12, 150, false);
+    ring(w, p.x, p.y, "#f4e7cf", 0.28, 8, 1.5);
+    addTrauma(w, 0.3);
+    float(w, p.x, p.y - 30, "INSURED – NO LIFE LOST", true);
+    w.bullets = w.bullets.filter((b) => b.friendly);
+    w.cues.push("shield");
+    return;
+  }
   p.lives -= 1;
   p.inv = 1.85;
   w.chain = 0;
@@ -1796,13 +1975,18 @@ function hurtPlayer(w: World, p: Player = w.player) {
     p.splat = 2;
     float(w, p.x, p.y - 24, "SPLAT");
   }
-  if (p.insured) {
-    p.insured = false;
-    float(w, p.x, p.y - 46, "INSURED");
-  } else if (p.weapon > 1) {
-    p.weapon -= 1;
+  if (w.arcade) {
+    if (p.weapon > 1) {
+      p.weapon -= 1;
+      p.feed = 0;
+      float(w, p.x, p.y - 46, gunName(p.weapon, p.family));
+    }
+  } else {
+    // a hit knocks off the gift boost; the power bought in the shop stays
+    if (p.boostT > 0 && p.boost > 0) float(w, p.x, p.y - 46, "BOOST LOST");
+    p.boost = 0;
+    p.boostT = 0;
     p.feed = 0;
-    float(w, p.x, p.y - 46, gunName(p.weapon, p.family));
   }
   w.flash = 0.22;
   addTrauma(w, 0.66);
@@ -1852,7 +2036,7 @@ function hurtPlayer(w: World, p: Player = w.player) {
 function firePlayer(w: World, p: Player, focus: boolean) {
   const feed = p.feed > 0;
   const family = p.family || "bubble";
-  const rank = Math.max(1, Math.min(6, p.weapon));
+  const rank = gunRank(p);
   const size = rank <= 2 ? 0 : rank <= 4 ? 1 : 2;
   const pack = volley(family, rank, focus);
   const ship = shipOf(w, p);
@@ -1860,6 +2044,7 @@ function firePlayer(w: World, p: Player, focus: boolean) {
   const owner = p === w.wing ? 1 : 0;
   // in a duel the top pilot faces down
   const up = w.duel && p === w.wing ? -1 : 1;
+  const vid = Math.round(w.time * 1000) * 2 + owner;
   for (const s of pack.shots) {
     if (w.bullets.length > 260) break;
     w.bullets.push({
@@ -1881,7 +2066,15 @@ function firePlayer(w: World, p: Player, focus: boolean) {
       owner,
       chain: s.chain,
       rank: size,
+      bounces: s.bounces,
+      soak: s.soak,
+      seed: (w.time * 60 + w.bullets.length) | 0,
+      volley: vid,
     });
+    if (s.style === STYLE.bidet) {
+      // the hose: every drop leaves with some of the ship's own sideways speed, so the jet bends and whips
+      w.bullets[w.bullets.length - 1].vx += p.mx * 0.38;
+    }
   }
   if (p.buddy > 0 && w.bullets.length < 260) {
     // the Brush Buddy circles the ship and adds a shot of its own to every volley
@@ -1928,6 +2121,8 @@ function firePlayer(w: World, p: Player, focus: boolean) {
       splash: 0,
       owner,
       rank: 0,
+      seed: i,
+      volley: -vid - i - 1,
     });
   }
   p.muzzle = 0.05;
@@ -1965,6 +2160,68 @@ function puff(w: World, x: number, y: number, style: number, size: number, life 
   if (w.reduce && life < 0.2) return;
   if (w.puffs.length > 36) w.puffs.shift();
   w.puffs.push({ x, y, life, max: life, style, size });
+}
+
+/** What the six newer guns' shots do on their way: curl, bounce, swell, soak. */
+function stepSpecialShot(w: World, b: Bullet, dt: number) {
+  if (b.squash) b.squash = Math.max(0, b.squash - dt);
+  if (b.style === STYLE.streamer) {
+    // curls after the nearest critter, as fast as paper can turn
+    const target = nearestEnemy(w, b.x, b.y);
+    const sp = Math.min(600, (Math.hypot(b.vx, b.vy) || 1) + 260 * dt);
+    let a = Math.atan2(b.vy, b.vx);
+    if (target && target.y > -10) {
+      let diff = Math.atan2(target.y - b.y, target.x - b.x) - a;
+      while (diff > Math.PI) diff -= Math.PI * 2;
+      while (diff < -Math.PI) diff += Math.PI * 2;
+      a += clamp(diff, -5.2 * dt, 5.2 * dt);
+    }
+    b.vx = Math.cos(a) * sp;
+    b.vy = Math.sin(a) * sp;
+    return;
+  }
+  if (b.style === STYLE.dryer) {
+    // hot air: it spreads as it goes
+    b.r += 24 * dt;
+    return;
+  }
+  if (b.style === STYLE.duck) {
+    if ((b.age ?? 0) < 1) b.r += 14 * dt;
+    return;
+  }
+  if (b.style === STYLE.sling || b.style === STYLE.sponge) {
+    if ((b.bounces ?? 0) > 0) {
+      const m = b.r + 2;
+      if ((b.x < m && b.vx < 0) || (b.x > WORLD_W - m && b.vx > 0)) {
+        b.vx *= -1;
+        b.bounces = (b.bounces ?? 0) - 1;
+        b.squash = 0.14;
+        b.hit = undefined;
+      } else if (b.y < m + 4 && b.vy < 0) {
+        b.vy *= -1;
+        b.bounces = (b.bounces ?? 0) - 1;
+        b.squash = 0.14;
+        b.hit = undefined;
+      }
+    }
+    if (b.style === STYLE.sponge && (b.soak ?? 0) > 0) {
+      // a sponge soaks up the enemy shots it touches: each one makes it fatter and its burst wider
+      for (const h of w.bullets) {
+        if (h.friendly || h.life <= 0 || h.shape === 16) continue;
+        if (Math.hypot(h.x - b.x, h.y - b.y) < b.r + h.r + 3) {
+          h.life = 0;
+          b.soak = (b.soak ?? 0) - 1;
+          b.soaked = (b.soaked ?? 0) + 1;
+          b.r += 2.6;
+          b.dmg *= 1.2;
+          b.splash = (b.splash ?? 0) + 7;
+          puff(w, h.x, h.y, STYLE.sponge, 20, 0.2);
+          w.cues.push("plink");
+          if ((b.soak ?? 0) <= 0) break;
+        }
+      }
+    }
+  }
 }
 
 /** Everything inside the circle takes the hit. Bosses and heavies feel a bath bomb, small fry are gone. */
@@ -2096,6 +2353,7 @@ function releaseShot(w: World, e: Enemy) {
 }
 
 function budgetShots(w: World, dt: number) {
+  if (w.range) return;
   const rules = fireBudget(w.level, WORLD_W);
   const crowd = (w.coop ? 1.25 : 1) * tuning(w).heat;
   w.budget += rules.rate * crowd * dt;
@@ -2534,6 +2792,7 @@ function holdPlace(w: World, e: Enemy, dt: number) {
   // The last one or two critters of a level do not get to sit at the top of the screen
   // out of reach: they come down for the pilot, again and again, until somebody wins.
   if (
+    !w.range &&
     w.spawns.length === 0 &&
     w.enemies.length <= 2 &&
     e.t > 6 &&
@@ -2678,7 +2937,7 @@ function holdPlace(w: World, e: Enemy, dt: number) {
   }
   if ((e.motion === "rank" || e.motion === "swoop") && e.kind !== "boss" && e.role !== "bonus") {
     const d = Math.max(0, (w.level - 4) / 96);
-    const chance = w.level < 4 ? 0 : 0.1 + 0.25 * d;
+    const chance = w.level < 4 || w.range ? 0 : 0.1 + 0.25 * d;
     if (w.rng() < chance * dt * 0.15) {
       const divers = w.enemies.reduce((n, o) => n + (o.motion === "dive" ? 1 : 0), 0);
       if (divers < 1 + Math.floor(w.level / 25) && e.y > 30 && !e.path) {
@@ -2884,6 +3143,10 @@ function drivePilot(w: World, p: Player, fly: Fly, dt: number) {
   p.buddy = Math.max(0, p.buddy - dt);
   p.magnet = Math.max(0, p.magnet - dt);
   p.rush = Math.max(0, p.rush - dt);
+  if (p.boostT > 0) {
+    p.boostT = Math.max(0, p.boostT - dt);
+    if (p.boostT <= 0) p.boost = 0;
+  }
   p.star = Math.max(0, p.star - dt);
   if (fire && p.fireCd <= 0) firePlayer(w, p, focus);
   tryMissile(w, p, fly.alt, dt);
@@ -3038,7 +3301,20 @@ export function step(w: World, dt: number, input: InputState) {
     if (e.hp <= 0) continue;
     if (w.freeze > 0 && e.kind !== "boss") continue;
     if (w.freeze > 0 && e.kind === "boss" && w.freeze > 1.5) continue;
+    const big = e.kind === "boss" || e.role === "mini";
+    // Squeaky Duck: what a ring touched moves and shoots at half speed for a moment
+    // (a boss only loses a fifth: it is too big to be impressed)
+    const wasDt = dt;
+    if ((e.slow ?? 0) > 0) {
+      e.slow = Math.max(0, (e.slow ?? 0) - dt);
+      dt *= big ? 0.8 : 0.5;
+    }
     moveEnemy(w, e, dt);
+    if ((e.push ?? 0) > 1 && !big) {
+      // Hair Dryer: blown back up the screen, then it finds its way down again
+      if (!e.path && e.y > 14) e.y = Math.max(14, e.y - (e.push ?? 0) * wasDt);
+      e.push = (e.push ?? 0) * Math.max(0, 1 - 5 * wasDt);
+    }
     if (e.kind === "boss") {
       e.fire -= dt;
       if (e.fire <= 0 && w.freeze <= 0 && !w.intro) {
@@ -3055,6 +3331,7 @@ export function step(w: World, dt: number, input: InputState) {
         if (e.warn <= 0) releaseShot(w, e);
       }
     }
+    dt = wasDt;
   }
   if (w.freeze <= 0) budgetShots(w, dt);
 
@@ -3103,6 +3380,7 @@ export function step(w: World, dt: number, input: InputState) {
       pushHostile(w, b.x - 8, b.y, Math.PI / 2 - 0.2, 80, 4, 9, true);
       pushHostile(w, b.x + 8, b.y, Math.PI / 2 + 0.2, 80, 4, 9, true);
     }
+    if (b.friendly && b.life > 0 && b.style !== undefined && b.style >= 20) stepSpecialShot(w, b, dt);
     const well = w.hazards.find((h) => h.kind === "well");
     if (well) {
       const dx = well.x - b.x;
@@ -3165,6 +3443,19 @@ export function step(w: World, dt: number, input: InputState) {
           }
           continue;
         }
+        if (b.style === STYLE.dryer) {
+          // hot air shoves it back; of one breath small fry feel one puff, the big ones up to three
+          e.push = Math.max(e.push ?? 0, 170 * Math.max(0.35, b.life / DRYER_LIFE));
+          if (e.airId !== b.volley) {
+            e.airId = b.volley;
+            e.airN = 0;
+          }
+          e.airN = (e.airN ?? 0) + 1;
+          if ((e.airN ?? 0) > (e.kind === "boss" || e.kind === "cruiser" || e.role === "mini" ? 3 : 1)) {
+            (b.hit ??= []).push(e);
+            continue;
+          }
+        } else if (b.style === STYLE.duck) e.slow = Math.max(e.slow ?? 0, 1.2);
         e.hp -= b.style === STYLE.mist ? b.dmg * mistPower(b.life) : b.dmg;
         e.by = b.owner ?? 0;
         // no kills to count in a boss fight: there the hits charge the Super Flush
@@ -3178,7 +3469,7 @@ export function step(w: World, dt: number, input: InputState) {
               other.by = b.owner ?? 0;
             }
           }
-          ring(w, b.x, b.y, b.style === STYLE.soap ? "#ffd9a0" : "#e07a3d", 0.18, 8, 1.2);
+          ring(w, b.x, b.y, b.style === STYLE.soap ? "#ffd9a0" : b.style === STYLE.sponge ? "#fff3b8" : "#e07a3d", 0.18, b.style === STYLE.sponge ? (b.splash ?? 8) * 0.5 : 8, 1.2);
         }
         if ((b.chain ?? 0) > 0) {
           // Zap Brush: the bolt jumps on to the nearest critters, a little weaker each time
@@ -3208,14 +3499,20 @@ export function step(w: World, dt: number, input: InputState) {
             dmg *= 0.75;
           }
         }
-        if (b.style !== undefined && b.style >= 10 && b.style <= 15) {
+        if (b.style !== undefined && ((b.style >= 10 && b.style <= 15) || b.style >= 20)) {
           const sizes = [20, 28, 36];
-          puff(w, b.x, e.kind === "boss" ? b.y : e.y + e.r * 0.3, b.style, sizes[b.rank ?? 0] ?? 24);
+          const size = b.style === STYLE.sponge ? 34 + (b.soaked ?? 0) * 12 : (sizes[b.rank ?? 0] ?? 24);
+          puff(w, b.x, e.kind === "boss" ? b.y : e.y + e.r * 0.3, b.style, size, b.style >= 20 ? 0.22 : 0.16);
         }
         const left = b.pierce ?? 0;
         if (left > 0) {
           b.pierce = left - 1;
           (b.hit ??= []).push(e);
+          if (b.style === STYLE.sling) {
+            // a rubber ball does not go through: it kicks off sideways and keeps climbing
+            b.vx = b.vx === 0 ? (b.x < e.x ? -260 : 260) : -b.vx;
+            b.squash = 0.14;
+          }
         } else b.life = 0;
         if (e.kind === "boss" || e.kind === "cruiser") w.cues.push("hit");
         break;
@@ -3274,7 +3571,7 @@ export function step(w: World, dt: number, input: InputState) {
     return;
   }
 
-  if (!w.bossUp && w.spawns.length === 0 && w.enemies.length === 0 && w.level > 0 && !w.hazards.some((h) => h.kind === "pipe")) {
+  if (!w.range && !w.bossUp && w.spawns.length === 0 && w.enemies.length === 0 && w.level > 0 && !w.hazards.some((h) => h.kind === "pipe")) {
     if (!w.clearing) {
       w.clearing = true;
       w.lootT = 0;
@@ -3311,8 +3608,10 @@ function finishLevel(w: World) {
     w.score += 150;
     if (w.arcade) w.purse += 50;
     else w.meta.dollars += 100;
-    if (w.player.weapon < weaponCap(w)) w.player.weapon += 1;
-    else if (w.player.weapon >= 6) w.player.feed = 6.5;
+    if (w.arcade) {
+      if (w.player.weapon < 6) w.player.weapon += 1;
+      else w.player.feed = 6.5;
+    } else w.meta.dollars += 50;
   } else if (!boss && slot === 5) {
     w.banner = `${w.slain}/${w.born}`;
   }
@@ -3534,7 +3833,7 @@ function duelGift(w: World, pk: Pickup, i: number) {
   const foe = i === 0 ? b : w.player;
   const say = (text: string) => float(w, p.x, p.y + (i === 0 ? -30 : 34), text, true);
   if (pk.kind === "W") {
-    const family = FAMILIES[(((pk.value || 0) % FAMILIES.length) + FAMILIES.length) % FAMILIES.length] ?? "bubble";
+    const family = DUEL_GUNS[(((pk.value || 0) % DUEL_GUNS.length) + DUEL_GUNS.length) % DUEL_GUNS.length] ?? "bubble";
     if (family !== p.family) p.family = family;
     else if (p.weapon < DUEL_RANK) p.weapon += 1;
     else p.feed = 5;
@@ -3675,7 +3974,7 @@ function stepDuel(w: World, dt: number, input: InputState) {
       const sudden = d.clock >= DUEL_SUDDEN;
       const kind: PickupKind = roll < 0.4 ? "W" : roll < 0.55 ? (sudden ? "W" : "S") : roll < 0.68 ? (sudden ? "B" : "L") : roll < 0.82 ? "C" : roll < 0.93 ? "B" : sudden ? "C" : "T";
       const fromLeft = w.rng() < 0.5;
-      const hue = kind === "W" ? Math.floor(w.rng() * FAMILIES.length) : undefined;
+      const hue = kind === "W" ? Math.floor(w.rng() * DUEL_GUNS.length) : undefined;
       w.pickups.push({ kind, x: fromLeft ? -30 : WORLD_W + 30, y: WORLD_H / 2, vx: (fromLeft ? 1 : -1) * (60 + w.rng() * 40), vy: 0, value: hue ?? 0, rest: w.rng() * 6, hue, age: 0 });
     }
   }

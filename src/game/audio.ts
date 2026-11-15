@@ -3,6 +3,7 @@ export class Sfx {
   muted = false;
   volume = 1;
   private lastShot = 0;
+  private lastHose = 0;
   private lastGraze = 0;
   private lastArmor = 0;
   private noiseBuf: AudioBuffer | null = null;
@@ -109,6 +110,43 @@ export class Sfx {
     }
     if (family === "mist") {
       this.noise(0.05, 0.022 * full * push, 3800);
+      return;
+    }
+    if (family === "dryer") {
+      // a warm whoosh
+      this.noise(0.12, 0.03 * full * push, 1500);
+      this.tone(118 * jitter, 0.1, "sawtooth", 0.006, 10, pan);
+      return;
+    }
+    if (family === "bidet") {
+      // running water: a thin hiss, kept quiet because it never stops
+      if (now - this.lastHose < 105) return;
+      this.lastHose = now;
+      this.noise(0.1, 0.016 * push, 2900);
+      this.tone(520 * jitter, 0.05, "sine", 0.004, 140, pan);
+      return;
+    }
+    if (family === "sling") {
+      // boing
+      this.tone(200 * jitter, 0.09, "triangle", 0.03 * full * push, 330, pan);
+      return;
+    }
+    if (family === "streamer") {
+      // fwip of paper
+      this.noise(0.045, 0.02 * push, 4600);
+      this.tone(760 * jitter, 0.06, "sine", 0.01 * full, -340, pan);
+      return;
+    }
+    if (family === "sponge") {
+      // a wet plop
+      this.tone(128 * jitter, 0.11, "sine", 0.04 * full * push, 110, pan);
+      this.noise(0.04, 0.014, 900);
+      return;
+    }
+    if (family === "duck") {
+      // squeak: two quick notes, the second higher
+      this.tone(820 * jitter, 0.05, "square", 0.008 * full * push, 380, pan);
+      this.tone(1240 * jitter, 0.04, "sine", 0.009 * full, 260, pan);
       return;
     }
     if (level >= 6) {

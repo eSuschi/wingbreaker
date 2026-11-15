@@ -11,13 +11,14 @@ It's a love letter to the shooters we grew up on, mostly _Star Defender 2_ and _
 - **100 levels** in 10 rooms of the house, from the Old Bathroom through the Sewer and the Hot Kitchen to the Throne Room. Every room has its own army and its own boss.
 - **Two pilots on one screen.** Grab a friend. Stay close and you both hit harder; if one of you goes down, the other can fly over and pick them back up. Fill both Super Flush bars, press bomb together, and the whole screen goes down the drain. After every level a card says who shot more, and gives the other one a title they did not ask for.
 - **Duel.** The same friend, now your enemy. One of you at the bottom, one at the top, gifts drifting down the middle, first to three rounds. Loser cleans the bathroom.
-- **Six guns**, each with six power levels and its own way of working: Bubble Blaster, Soap Cannon, Toothpaste Laser, Zap Brush, Flush Wave and Freshener Mist. More power means more of it in the air at once.
+- **Twelve guns**, each with its own way of working: Bubble Blaster, Soap Cannon, Toothpaste Laser, Zap Brush, Flush Wave, Freshener Mist, and six that came later: a Hair Dryer that shoves them back, a Bidet Hose that whips when you swing the ship, a Rubber Slingshot that bounces off the walls, a Paper Streamer that curls after whatever is nearest, a Sponge Bomber that soaks up enemy shots, and a Squeaky Duck whose squeak slows them down. Each pilot picks their own.
+- **Gun power is bought, not found.** Six steps, sold in the shop, kept for good, the same for every gun and both pilots. More power means more of it in the air at once.
 - **Three second weapons** with limited ammo: homing plunger missiles, bath bombs and a paper roll that unrolls across a whole line.
 - **Fourteen ships** that all fly differently. A bathtub with two extra lives. A shopping cart that makes everything worth more. A toilet that brings its own brush.
 - **Enemies that fly in formation.** They loop in from the sides, settle into rows, diamonds, columns and arrowheads, and peel off to dive at you.
 - **No two levels in a row feel the same.** Every room has a poop storm to survive (shoot it or dodge it), a bonus round, a mini-boss with bodyguards, and a pipe run where you thread the gaps or blast the valve and burst the whole pipe.
 - **Bosses with a move of their own.** Each one arrives with a name card and marks a column or a strip of the screen before it strikes, so you always get to see it coming.
-- **A shop** where the cash you earn turns into permanent upgrades.
+- **A shop with a firing range.** Power, guns, ships and gear, and a window where the gun you are looking at fires at real targets before you pay for it.
 - **Three difficulty levels**, and **New Game+** once the Toilet King is down: the whole house again, tougher and better paid.
 - **Arcade mode** (no saves, no end, it just keeps getting worse) and a **Daily** run of 30 stages that's the same for everyone that day.
 - **Twenty achievements** that pay cash the moment you earn them.
@@ -37,7 +38,7 @@ Shoot everything. Don't get hit. Catch the gifts.
 
 `Enter` confirms, `Esc` pauses. Every key can be changed in Options.
 
-**In a duel** pilot 1 flies the bottom half and pilot 2 the top half, with the same keys as above. There are no bombs: fly up to the middle line for a gift, if you dare.
+**In a duel** pilot 1 flies the bottom half and pilot 2 the top half, with the same keys as above. There are no bombs: fly up to the middle line for a gift, if you dare. In a duel both pilots start with the Bubble Blaster, and a gift box with a gun on it hands you that gun (one of the first six).
 
 **Gamepads** work too: stick or d-pad to move (the stick is analog, a light push is a slow slide), A to fire, B or X to bomb, Y for the second weapon. With two pilots and one pad, the pad goes to the wingman, so one of you can stay on the keyboard.
 
@@ -47,7 +48,7 @@ Shoot everything. Don't get hit. Catch the gifts.
 
 - **Poop** in various shapes and colours: bad. Dodge it.
 - **Anything in a soap bubble is a gift**; enemy shots never are, and wear a red-orange outline instead.
-- **Gift box**: a gun. The picture on it says which. Your own gun on the box means a power-up; any other box swaps guns and keeps your power. Power comes in steps as you go deeper (2 until level 11, one more every twelve levels, full from level 48); a gift at the limit pays cash instead.
+- **Gift box**: one step of gun power on top of what you bought, for 25 seconds. Two boxes lend two steps. At full power it lights the afterburner instead. Getting hit knocks the gift off, never the power you paid for. It never changes your gun: that is the shop's job.
 - **Ammo crate**: plunger missiles, bath bombs or paper rolls for the second weapon.
 - **Shield bubble**: eats one hit.
 - **Spray can**: one more bomb.

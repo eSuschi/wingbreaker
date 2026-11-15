@@ -20,7 +20,7 @@ export type SkinId =
   | "tub"
   | "toilet"
   | "throne";
-export type UpgradeId = "hull" | "magazine" | "capacitor" | "magnet" | "salvage" | "trigger" | "wings" | "luck" | "salvo" | "insurance" | "pockets";
+export type UpgradeId = "hull" | "magazine" | "magnet" | "salvage" | "trigger" | "luck" | "salvo" | "insurance" | "pockets";
 
 export type Upgrades = Record<UpgradeId, number>;
 
@@ -34,6 +34,8 @@ export type Campaign = {
   skin2: SkinId;
   owned: SkinId[];
   upgrades: Upgrades;
+  /** gun power bought in the shop: 0 to 5 steps on top of power 1, for whichever gun is flown */
+  power: number;
   mute: boolean;
   shake: boolean;
   /** true: the next level starts by itself. Off by default: the player presses NEXT. */
@@ -51,6 +53,8 @@ export type Campaign = {
   music: number;
   sfx: number;
   gun: GunFamily;
+  /** the wingman's gun, when two fly: any gun that is owned */
+  gun2: GunFamily;
   guns: GunFamily[];
   stars: number[];
   seen: string[];
@@ -169,9 +173,10 @@ export const SKINS: SkinDef[] = [
   { ...PLAIN, id: "throne", name: "Golden Throne", art: "golden_throne", price: 0, stars: 250, trait: "Royal: quicker, fires faster, hits harder.", speed: 1.05, rate: 0.9, dmg: 1.1, hull: "#e2b84a", edge: "#8a6420", canopy: "#fff1b8", hot: "#ffe38a" },
 ];
 
+/** What the two retired gun upgrades cost, for the refund. */
+const OLD_GUN_UPGRADES = { wings: [420, 980], capacitor: 480 };
+
 export const UPGRADE_LIST: { id: UpgradeId; name: string; blurb: string; max: number; prices: number[] }[] = [
-  { id: "wings", name: "Wingtips", blurb: "Hangar gun starts one rank higher.", max: 2, prices: [420, 980] },
-  { id: "capacitor", name: "Capacitor", blurb: "Start each level at gun 2, on top of wingtips.", max: 1, prices: [480] },
   { id: "trigger", name: "Hair trigger", blurb: "Your gun cycles faster.", max: 2, prices: [220, 520] },
   { id: "luck", name: "Greasy palm", blurb: "Enemies drop more junk.", max: 2, prices: [180, 440] },
   { id: "magnet", name: "Magnet", blurb: "Gifts drift toward your ship.", max: 2, prices: [160, 400] },
@@ -179,7 +184,7 @@ export const UPGRADE_LIST: { id: UpgradeId; name: string; blurb: string; max: nu
   { id: "magazine", name: "Locker", blurb: "+1 bomb at the start of a level.", max: 2, prices: [300, 680] },
   { id: "salvo", name: "Salvo", blurb: "Start each level with homing missiles.", max: 2, prices: [260, 640] },
   { id: "hull", name: "Hull", blurb: "+1 life at the start of a level.", max: 2, prices: [400, 920] },
-  { id: "insurance", name: "Insurance", blurb: "First hit each level keeps your gun rank.", max: 1, prices: [1200] },
+  { id: "insurance", name: "Insurance", blurb: "The first hit each level costs no life.", max: 1, prices: [1200] },
   { id: "pockets", name: "Quick Charge", blurb: "Kills charge your next bomb faster.", max: 2, prices: [500, 1100] },
 ];
 
@@ -294,7 +299,8 @@ export function freshCampaign(): Campaign {
     skin: "steel",
     skin2: "bone",
     owned: ["steel"],
-    upgrades: { hull: 0, magazine: 0, capacitor: 0, magnet: 0, salvage: 0, trigger: 0, wings: 0, luck: 0, salvo: 0, insurance: 0, pockets: 0 },
+    upgrades: { hull: 0, magazine: 0, magnet: 0, salvage: 0, trigger: 0, luck: 0, salvo: 0, insurance: 0, pockets: 0 },
+    power: 0,
     mute: false,
     shake: true,
     autoAdvance: false,
@@ -307,6 +313,7 @@ export function freshCampaign(): Campaign {
     music: 55,
     sfx: 80,
     gun: "bubble",
+    gun2: "bubble",
     guns: ["bubble"],
     stars: Array(LEVELS + 1).fill(0),
     seen: [],
@@ -371,8 +378,20 @@ function sanitize(raw: Partial<Campaign> | null | undefined, legacyBest: number)
   const skin = owned.includes(raw.skin as SkinId) ? (raw.skin as SkinId) : "steel";
   const skin2 = owned.includes(raw.skin2 as SkinId) ? (raw.skin2 as SkinId) : skin === "bone" ? "steel" : "bone";
   const up = raw.upgrades ?? base.upgrades;
+  // Wingtips and the Capacitor are gone: gun power is one ladder in the shop now.
+  // Whoever bought them gets every dollar back, once, the first time the save is read.
+  const old = up as Record<string, unknown>;
+  const refund = OLD_GUN_UPGRADES.wings.slice(0, clampInt(old.wings, 0, 2, 0)).reduce((a, b) => a + b, 0) + (clampInt(old.capacitor, 0, 1, 0) > 0 ? OLD_GUN_UPGRADES.capacitor : 0);
+  const guns: GunFamily[] = [];
+  for (const g of Array.isArray(raw.guns) ? raw.guns : []) {
+    const f = familyFrom(g);
+    if (f && !guns.includes(f)) guns.push(f);
+  }
+  if (!guns.includes("bubble")) guns.unshift("bubble");
+  const gun = familyFrom(raw.gun);
+  const gun2 = familyFrom(raw.gun2);
   return {
-    dollars: clampInt(raw.dollars, 0, 9_999_999, 0),
+    dollars: clampInt(clampInt(raw.dollars, 0, 9_999_999, 0) + refund, 0, 9_999_999, 0),
     level: clampInt(raw.level, 1, LEVELS, 1),
     best: Math.max(clampInt(raw.best, 0, 99_999_999, 0), legacyBest),
     cleared: Boolean(raw.cleared),
@@ -382,16 +401,15 @@ function sanitize(raw: Partial<Campaign> | null | undefined, legacyBest: number)
     upgrades: {
       hull: clampInt(up.hull, 0, 2, 0),
       magazine: clampInt(up.magazine, 0, 2, 0),
-      capacitor: clampInt(up.capacitor, 0, 1, 0),
       magnet: clampInt(up.magnet, 0, 2, 0),
       salvage: clampInt(up.salvage, 0, 3, 0),
       trigger: clampInt(up.trigger, 0, 2, 0),
-      wings: clampInt(up.wings, 0, 2, 0),
       luck: clampInt(up.luck, 0, 2, 0),
       salvo: clampInt(up.salvo, 0, 2, 0),
       insurance: clampInt(up.insurance, 0, 1, 0),
       pockets: clampInt(up.pockets, 0, 2, 0),
     },
+    power: clampInt(raw.power, 0, POWER_PRICES.length, 0),
     mute: Boolean(raw.mute),
     shake: raw.shake !== false,
     autoAdvance: raw.autoAdvance === true,
@@ -409,16 +427,9 @@ function sanitize(raw: Partial<Campaign> | null | undefined, legacyBest: number)
     crew: raw.crew === "coop" ? "coop" : "solo",
     music: clampInt(raw.music, 0, 100, 55),
     sfx: clampInt(raw.sfx, 0, 100, 80),
-    gun: familyFrom(raw.gun) ?? "bubble",
-    guns: (() => {
-      const list: GunFamily[] = [];
-      for (const g of Array.isArray(raw.guns) ? raw.guns : []) {
-        const f = familyFrom(g);
-        if (f && !list.includes(f)) list.push(f);
-      }
-      if (!list.includes("bubble")) list.unshift("bubble");
-      return list;
-    })(),
+    gun: gun && guns.includes(gun) ? gun : "bubble",
+    gun2: gun2 && guns.includes(gun2) ? gun2 : gun && guns.includes(gun) ? gun : "bubble",
+    guns,
     stars: sanitizeStars(raw.stars),
     seen: Array.isArray(raw.seen) ? raw.seen.filter((s) => typeof s === "string").slice(0, 80) : [],
     snacks: clampInt(raw.snacks, 0, 100000, 0),
@@ -527,16 +538,15 @@ export function luckMul(rank: number) {
 }
 
 export function loadoutOf(c: Campaign) {
-  const wings = Math.min(2, c.upgrades.wings);
-  const cap = c.upgrades.capacitor > 0 ? 1 : 0;
   const ship = skinDef(c.skin);
   return {
     // easy mode flies with one life more
     lives: Math.max(1, 3 + c.upgrades.hull + ship.lives + (c.difficulty === 0 ? 1 : 0)),
     bombs: 2 + c.upgrades.magazine + ship.bombs,
-    weapon: Math.min(6, 1 + cap + wings),
+    weapon: Math.max(1, Math.min(6, 1 + (c.power || 0))),
     missiles: Math.min(6, (c.upgrades.salvo || 0) * 2),
     family: c.gun,
+    family2: c.gun2 ?? c.gun,
   };
 }
 
@@ -552,24 +562,43 @@ export function grantStars(c: Campaign) {
   }
 }
 
-/** What it costs to start every sortie with a gun other than the Bubble Blaster. */
+/** What it costs to own a gun other than the Bubble Blaster. Bought once, flown by either pilot. */
 export const GUN_PRICE = 600;
 
-export function buyGun(c: Campaign, family: GunFamily): "ok" | "poor" {
-  if (family === "bubble" || c.guns.includes(family)) {
-    c.gun = family;
-    return "ok";
-  }
-  if (c.dollars < GUN_PRICE) return "poor";
-  c.dollars -= GUN_PRICE;
-  c.guns.push(family);
-  c.gun = family;
+/**
+ * Gun power, step by step: what it costs to go from power 1 to 2, 2 to 3 and so on.
+ * Priced against what the campaign pays out, so a pilot who puts about half the cash into
+ * power flies power 2 from level 4, 3 from 12, 4 from 25, 5 from the mid-forties and 6 from
+ * the high sixties; one who buys nothing else is a dozen levels ahead of that.
+ */
+export const POWER_PRICES = [300, 700, 1400, 2600, 4500];
+
+export function buyPower(c: Campaign): "ok" | "max" | "poor" {
+  const have = c.power || 0;
+  if (have >= POWER_PRICES.length) return "max";
+  const price = POWER_PRICES[have];
+  if (c.dollars < price) return "poor";
+  c.dollars -= price;
+  c.power = have + 1;
   return "ok";
 }
 
-export function equipGun(c: Campaign, family: GunFamily) {
+/** Buys the gun if it is not owned yet, and puts it on that pilot's ship. */
+export function buyGun(c: Campaign, family: GunFamily, seat: 0 | 1 = 0): "ok" | "poor" {
+  if (family !== "bubble" && !c.guns.includes(family)) {
+    if (c.dollars < GUN_PRICE) return "poor";
+    c.dollars -= GUN_PRICE;
+    c.guns.push(family);
+  }
+  if (seat === 1) c.gun2 = family;
+  else c.gun = family;
+  return "ok";
+}
+
+export function equipGun(c: Campaign, family: GunFamily, seat: 0 | 1 = 0) {
   if (family !== "bubble" && !c.guns.includes(family)) return false;
-  c.gun = family;
+  if (seat === 1) c.gun2 = family;
+  else c.gun = family;
   return true;
 }
 
@@ -595,7 +624,7 @@ export const FEATS: Feat[] = [
   { id: "clean_hands", name: "Clean Hands", blurb: "Finish 10 levels without being hit.", cash: 300, done: (c) => count(c, "perfect") >= 10 },
   { id: "spotless", name: "Spotless", blurb: "Finish 50 levels without being hit.", cash: 1000, done: (c) => count(c, "perfect") >= 50 },
   { id: "dry_run", name: "Dry Run", blurb: "Beat a boss without using a bomb.", cash: 250, done: (c) => count(c, "bossNoBomb") > 0 },
-  { id: "arsenal", name: "Full Cabinet", blurb: "Fly with all six guns at least once.", cash: 300, done: (c) => ["bubble", "soap", "paste", "zap", "flush", "mist"].every((g) => count(c, `gun_${g}`) > 0) },
+  { id: "arsenal", name: "Full Cabinet", blurb: "Fly with six different guns at least once.", cash: 300, done: (c) => Object.keys(c.tally).filter((k) => k.startsWith("gun_") && count(c, k) > 0).length >= 6 },
   { id: "quack", name: "Quack", blurb: "Catch 10 rubber ducks.", cash: 200, done: (c) => count(c, "ducks") >= 10 },
   { id: "wingman", name: "Never Leave a Wingman", blurb: "Pick your partner back up 5 times.", cash: 300, done: (c) => count(c, "revives") >= 5 },
   { id: "fleet", name: "Fleet Admiral", blurb: "Own six ships.", cash: 500, done: (c) => c.owned.length >= 6 },

@@ -1,6 +1,6 @@
 import { armyHas, armyRoles } from "./army";
 
-export type GunFamily = "bubble" | "soap" | "paste" | "zap" | "flush" | "mist";
+export type GunFamily = "bubble" | "soap" | "paste" | "zap" | "flush" | "mist" | "dryer" | "bidet" | "sling" | "streamer" | "sponge" | "duck";
 export type VKind = "dart" | "wedge" | "cruiser" | "drone" | "boss";
 
 export type VSpawn = {
@@ -64,6 +64,10 @@ export type Shot = {
   life: number;
   /** Zap Brush: how many more critters the bolt jumps to after its first hit */
   chain: number;
+  /** Rubber Slingshot and Sponge Bomber: bounces off the walls left */
+  bounces?: number;
+  /** Sponge Bomber: enemy shots it can still soak up */
+  soak?: number;
 };
 
 const mulberry = (seed: number) => {
@@ -90,15 +94,10 @@ export function sizeMul(width: number) {
   return Math.max(1, Math.min(1.5, width / 800));
 }
 
-/**
- * The strongest gun power a gift can raise you to at this point of the campaign.
- * Gifts used to stack to the top by level 11 and everything melted on entry; now power
- * comes in steps: 2 until level 11, then one more every twelve levels, 6 from level 48.
- * A gun bought in the shop still starts above this (see takePickup).
- */
-export function gunCap(level: number) {
-  return Math.max(2, Math.min(6, 2 + Math.floor(Math.max(1, level) / 12)));
-}
+/** A gun gift in the campaign: one power step on top of what the shop sold you, for this long. */
+export const BOOST_TIME = 25;
+/** Gifts stack this far above the shop power. */
+export const BOOST_MAX = 2;
 
 export function enemyBody(kind: VKind, level: number) {
   const { lv } = diff(level);
@@ -626,7 +625,12 @@ export function mistPower(life: number) {
 }
 
 /** Bullet styles, shared by the logic (what a shot does) and the renderer (what it looks like). */
-export const STYLE = { bubble: 10, soap: 11, paste: 12, zap: 13, flush: 14, mist: 15, plunger: 4, bathBomb: 16, paperRoll: 17, ribbon: 18, buddy: 19 } as const;
+export const STYLE = { bubble: 10, soap: 11, paste: 12, zap: 13, flush: 14, mist: 15, plunger: 4, bathBomb: 16, paperRoll: 17, ribbon: 18, buddy: 19, dryer: 20, bidet: 21, sling: 22, streamer: 23, sponge: 24, duck: 25 } as const;
+
+/** How long a puff of the Hair Dryer lives: it reaches the formation from the back of the lane, just. */
+export const DRYER_LIFE = 0.74;
+/** Seconds between two drops of the Bidet Hose: the renderer stretches each drop to the next. */
+export const BIDET_CD = 0.049;
 
 /**
  * One volley for a gun family at a power level. Power is shared by all six families and
@@ -640,6 +644,12 @@ export const STYLE = { bubble: 10, soap: 11, paste: 12, zap: 13, flush: 14, mist
  * ZAP BRUSH       bolts that jump on to nearby critters (jumps 1, 1, 2, 2, 3, 3)
  * FLUSH WAVE      wide slow crescents that wash through everything (1, 1, 2, 2, 3, 3)
  * FRESHENER MIST  a short cone, half as strong again as the rest, but only up close
+ * HAIR DRYER      a wide cone of hot air that blows through the front rows and shoves them back
+ * BIDET HOSE      an unbroken jet that bends when the ship moves (1, 1, 2, 2, 3, 3 jets)
+ * RUBBER SLINGSHOT balls that bounce off the walls, the ceiling and the critters
+ * PAPER STREAMER  ribbons that curl after the nearest critter, a little weaker for never missing
+ * SPONGE BOMBER   big slow sponges that soak up enemy shots and burst wider for each one
+ * SQUEAKY DUCK    rings of sound through three or four critters, and what they touch slows down
  */
 export function volley(family: GunFamily, rank: number, focus: boolean): { shots: Shot[]; cd: number } {
   const r = Math.max(1, Math.min(6, Math.round(rank)));
@@ -715,6 +725,77 @@ export function volley(family: GunFamily, rank: number, focus: boolean): { shots
     }
     return { shots, cd };
   }
+  if (family === "dryer") {
+    const puffs = [3, 3, 4, 4, 5, 5][i];
+    const cd = 0.15;
+    const half = ([0.2, 0.22, 0.26, 0.28, 0.32, 0.34][i]) * (focus ? 0.55 : 1);
+    for (let b = 0; b < puffs; b++) {
+      const a = -half + (2 * half * b) / (puffs - 1);
+      // A puff blows through the first critter into the one behind it (two behind from power 4),
+      // then it is spent. Small fry take one puff of each breath and no more; a heavy, a
+      // mini-boss or a boss is big enough to catch three, which is about par. The cone gets
+      // wider and denser with power, so each puff carries a little less.
+      add({ ox: Math.sin(a) * 8, vx: Math.sin(a) * 700, vy: -Math.cos(a) * 700, r: 9 + i * 0.7, dmg: dps * cd * [0.35, 0.35, 0.31, 0.31, 0.28, 0.28][i], style: STYLE.dryer, pierce: [1, 1, 1, 2, 2, 2][i], life: DRYER_LIFE });
+    }
+    return { shots, cd };
+  }
+  if (family === "bidet") {
+    const jets = [1, 1, 2, 2, 3, 3][i];
+    const cd = BIDET_CD;
+    for (let b = 0; b < jets; b++) {
+      const k = b - (jets - 1) / 2;
+      add({ ox: k * 9, vx: k * 46 * tight, vy: -960, r: 3 + (jets === 1 ? i * 0.5 : 0), dmg: (dps * cd) / jets, style: STYLE.bidet, life: 0.8 });
+    }
+    return { shots, cd };
+  }
+  if (family === "sling") {
+    const pairs = [0, 0, 1, 1, 2, 2][i];
+    const cd = [0.24, 0.2, 0.24, 0.2, 0.24, 0.21][i];
+    const bounces = [2, 2, 3, 3, 3, 4][i];
+    const total = dps * cd;
+    // one ball straight up the middle, which kicks off sideways from the first thing it hits;
+    // from power 3, pairs out to the sides that come back off the walls
+    add({ ox: 0, vx: 0, vy: -680, r: 5.6 + i * 0.25, dmg: total * [0.98, 0.98, 0.8, 0.8, 0.72, 0.72][i], style: STYLE.sling, life: 2.4, bounces, pierce: 1 });
+    for (let b = 0; b < pairs; b++) {
+      const a = (0.3 + b * 0.3) * tight;
+      for (const dir of [-1, 1]) {
+        add({ ox: dir * 8, vx: Math.sin(a) * 640 * dir, vy: -Math.cos(a) * 640, r: 5 + i * 0.2, dmg: total * (pairs === 1 ? 0.2 : 0.14), style: STYLE.sling, life: 2.4, bounces, pierce: 1 });
+      }
+    }
+    return { shots, cd };
+  }
+  if (family === "streamer") {
+    const strips = [1, 1, 2, 2, 3, 3][i];
+    const cd = 0.2;
+    for (let b = 0; b < strips; b++) {
+      const k = b - (strips - 1) / 2;
+      const a = (strips === 1 ? 0 : k * 0.55) * (focus ? 0.5 : 1);
+      // it finds its own way and wastes nothing, so the ribbons carry six tenths of the punch
+      add({ ox: k * 10, vx: Math.sin(a) * 380, vy: -Math.cos(a) * 380, r: 4.4, dmg: (dps * cd * 0.6) / strips, style: STYLE.streamer, life: 1.9 });
+    }
+    return { shots, cd };
+  }
+  if (family === "sponge") {
+    const sponges = [1, 1, 1, 2, 2, 2][i];
+    const cd = 0.46;
+    const soak = [1, 1, 2, 2, 3, 3][i];
+    const splash = [34, 36, 38, 40, 42, 46][i];
+    for (let b = 0; b < sponges; b++) {
+      const k = b - (sponges - 1) / 2;
+      add({ ox: k * 20, vx: k * 70 * tight, vy: -430, r: 10 + i * 0.5, dmg: (dps * cd * 1.1) / sponges, style: STYLE.sponge, life: 2.3, splash, bounces: 2, soak });
+    }
+    return { shots, cd };
+  }
+  if (family === "duck") {
+    const rings = [1, 1, 1, 2, 2, 2][i];
+    const cd = [0.34, 0.3, 0.3, 0.34, 0.32, 0.3][i];
+    for (let b = 0; b < rings; b++) {
+      const k = b - (rings - 1) / 2;
+      // two rings fly side by side, far enough apart that small fry meet one of them
+      add({ ox: k * 46, vx: k * 40 * tight, vy: -430, r: 9 + i * 0.5, dmg: (dps * cd * 0.7) / rings, style: STYLE.duck, pierce: [2, 2, 2, 3, 3, 3][i], life: 1.7 });
+    }
+    return { shots, cd };
+  }
   // BUBBLE BLASTER
   const cd = 0.125;
   if (r === 1) add({ ox: 0, vx: 0, vy: -780, dmg: dps * cd, r: 3 });
@@ -741,7 +822,10 @@ export function podCount(rank: number) {
   return rank >= 6 ? 2 : rank >= 4 ? 1 : 0;
 }
 
-export const FAMILIES: GunFamily[] = ["bubble", "soap", "paste", "zap", "flush", "mist"];
+export const FAMILIES: GunFamily[] = ["bubble", "soap", "paste", "zap", "flush", "mist", "dryer", "bidet", "sling", "streamer", "sponge", "duck"];
+
+/** The six guns a duel deals in: its gifts swap between these, as they always did. */
+export const DUEL_GUNS: GunFamily[] = ["bubble", "soap", "paste", "zap", "flush", "mist"];
 
 const FAMILY_INFO: Record<GunFamily, { name: string; color: string; blurb: string }> = {
   bubble: { name: "BUBBLE BLASTER", color: "#4fd6e8", blurb: "Quick bubbles in a widening fan." },
@@ -750,6 +834,12 @@ const FAMILY_INFO: Record<GunFamily, { name: string; color: string; blurb: strin
   zap: { name: "ZAP BRUSH", color: "#f5d21c", blurb: "Bolts that jump from critter to critter." },
   flush: { name: "FLUSH WAVE", color: "#3f7fe0", blurb: "Wide waves that wash through everything." },
   mist: { name: "FRESHENER MIST", color: "#7fd38a", blurb: "Weak from afar, half as strong again up close." },
+  dryer: { name: "HAIR DRYER", color: "#ff5fa2", blurb: "A wide blast of hot air that shoves the front rows back." },
+  bidet: { name: "BIDET HOSE", color: "#a9dcff", blurb: "One unbroken jet. Swing the ship and it whips." },
+  sling: { name: "RUBBER SLINGSHOT", color: "#a8e04a", blurb: "Balls that bounce off walls, ceiling and critters." },
+  streamer: { name: "PAPER STREAMER", color: "#b48cff", blurb: "Ribbons that curl after the nearest critter." },
+  sponge: { name: "SPONGE BOMBER", color: "#e9b872", blurb: "Slow sponges that soak up enemy shots, then burst." },
+  duck: { name: "SQUEAKY DUCK", color: "#ffd84a", blurb: "Rings of squeak that slow down whatever they pass." },
 };
 
 export function familyColor(f: GunFamily) {
@@ -758,6 +848,11 @@ export function familyColor(f: GunFamily) {
 
 export function familyBlurb(f: GunFamily) {
   return (FAMILY_INFO[f] ?? FAMILY_INFO.bubble).blurb;
+}
+
+/** The gun's name without a power number, for the shop. */
+export function familyTitle(f: GunFamily) {
+  return (FAMILY_INFO[f] ?? FAMILY_INFO.bubble).name;
 }
 
 export function familyName(f: GunFamily, rank: number, hot: boolean) {
@@ -798,9 +893,10 @@ export const DEATH = [
 export const TIPS = [
   "Tip: Shift shows your real hitbox. You're smaller than you look.",
   "Tip: Grazing a golden nugget pays. Getting hit by one does not.",
-  "Tip: A gift with your own gun on it powers it up. Any other gift swaps guns and keeps the power.",
+  "Tip: Gun power is bought in the shop and it is yours for good. A gift box adds one step for 25 seconds.",
   "Tip: Anything in a soap bubble is a gift. Anything with a red-orange outline wants you dead.",
-  "Tip: Gun power comes in steps as you go deeper. A gift at the limit pays cash instead.",
+  "Tip: A hit knocks off the gift boost, never the power you paid for.",
+  "Tip: Twelve guns in the shop. Each pilot picks their own.",
   "Tip: Every kill charges your next bomb. Watch the bar by the bomb boxes.",
   "Tip: Fart clouds don't hurt. They just push. Like your aunt.",
   "Tip: Not using bombs pays extra. Being brave has a price tag.",
