@@ -6,6 +6,7 @@ import {
   buyGun,
   chapterOf,
   equipSkin,
+  claimFeats,
   isBossLevel,
   loadFile,
   loadoutOf,
@@ -33,6 +34,7 @@ import {
   LAST_WORDS,
   arcadeStage,
   bossScript,
+  bossSignature,
   clearCash,
   daySeed,
   enemyBody,
@@ -60,8 +62,8 @@ export let WORLD_H = 720;
 export let VIEW = 1;
 
 export type Kind = "dart" | "wedge" | "cruiser" | "drone" | "boss";
-/** W gun gift, S shield, B bomb, M second-weapon ammo, $ coin, D duck, L extra life, G magnet, Y brush buddy */
-export type PickupKind = "W" | "S" | "B" | "M" | "$" | "D" | "L" | "G" | "Y";
+/** W gun gift, S shield, B bomb, M second-weapon ammo, $ coin, D duck, L extra life, G magnet, Y brush buddy, C coffee, T star */
+export type PickupKind = "W" | "S" | "B" | "M" | "$" | "D" | "L" | "G" | "Y" | "C" | "T" | "F";
 export type Mode = "menu" | "shop" | "options" | "standby" | "play" | "pause" | "over" | "clear" | "victory" | "bridge" | "levels" | "guide" | "ranks" | "arcadeover";
 export type Motion = "rank" | "sine" | "swoop" | "pincer" | "hold" | "boss" | "spiral" | "zigzag" | "conga" | "rain" | "dive";
 export type Cue = "kill" | "big" | "hit" | "graze" | "pickup" | "hurt" | "shield" | "bomb" | "wave" | "boss" | "clean" | "drive" | "missile" | "plink";
@@ -129,6 +131,12 @@ export type Enemy = {
   hide: number;
   /** draw and hit scale picked at spawn from the screen width */
   size?: number;
+  /** Flying in to its place in the formation: where it holds, and how far off that it still is. */
+  path?: { hx: number; hy: number; dx: number; dy: number; cx: number; cy: number; u: number; dur: number };
+  /** how far the sprite banks into its turn while flying in */
+  lean?: number;
+  /** boss: volleys fired so far, to time its own attack */
+  sig?: number;
   /** pilot whose shot last hit it, for the two-pilot kill tally */
   by?: number;
   /** true when the enemy left the screen alive: removed without a kill or rewards */
@@ -183,6 +191,9 @@ export type Player = {
   /** seconds left on the Brush Buddy and the Magnet */
   buddy: number;
   magnet: number;
+  /** seconds left on the Coffee (fires faster) and the Star (cannot be hurt) */
+  rush: number;
+  star: number;
   family: GunFamily;
   splat: number;
   slow: number;
@@ -213,6 +224,8 @@ export type World = {
   parts: Particle[];
   floaters: Floater[];
   rings: Ring[];
+  /** achievement banners waiting their turn at the top of the screen */
+  toasts: { text: string; life: number }[];
   puffs: Puff[];
   arcs: Arc[];
   cues: Cue[];
@@ -308,6 +321,7 @@ type Spawn = {
   oy?: number;
   role?: string;
   line?: number;
+  entry?: number;
 };
 
 const BEST_KEY = "wingbreaker.best.v1";
@@ -437,6 +451,7 @@ export function createWorld(best = 0): World {
     parts: [],
     floaters: [],
     rings: [],
+    toasts: [],
     puffs: [],
     arcs: [],
     cues: [],
@@ -515,6 +530,8 @@ function freshPlayer(): Player {
     sec: 0,
     buddy: 0,
     magnet: 0,
+    rush: 0,
+    star: 0,
     family: "bubble",
     splat: 0,
     slow: 0,
@@ -584,8 +601,46 @@ export function closeOverlay(w: World) {
   w.player.speedUp = 0;
 }
 
+/**
+ * How hard the world pushes back right now: enemy toughness, how much they shoot and how
+ * fast, what it pays, and how long a boss's marked strike waits. Set by the difficulty,
+ * the New Game+ loop, or the arcade lap.
+ */
+export function tuning(w: World) {
+  if (w.arcade) {
+    const lap = arcadeStage(w.arcadeStage).lap;
+    return { hp: 1 + lap * 0.6, heat: 1 + lap * 0.2, speed: 1 + lap * 0.05, pay: 1, warn: 1 };
+  }
+  const d = Math.max(0, Math.min(2, w.meta.difficulty ?? 1));
+  const loop = w.meta.loop ?? 0;
+  return {
+    hp: [1, 1, 1.2][d] * (1 + loop * 0.6),
+    heat: [0.65, 1, 1.35][d] * (1 + loop * 0.15),
+    speed: [0.88, 1, 1.12][d] * (1 + Math.min(3, loop) * 0.04),
+    pay: [0.8, 1, 1.25][d] * (1 + loop * 0.5),
+    warn: [1.4, 1, 0.85][d],
+  };
+}
+
+export function setDifficulty(w: World, level: number) {
+  w.meta.difficulty = Math.max(0, Math.min(2, Math.round(level)));
+  persist(w, w.snap);
+}
+
+/** The campaign is finished: start it again from level 1, a loop tougher and better paid. */
+export function newLoop(w: World) {
+  w.meta.loop = (w.meta.loop ?? 0) + 1;
+  w.meta.level = 1;
+  w.level = 1;
+  w.score = 0;
+  w.record = false;
+  persist(w, null);
+  w.mode = "menu";
+}
+
 export function newMission(w: World) {
   w.meta.level = 1;
+  w.meta.loop = 0;
   w.meta.cleared = false;
   w.level = 1;
   w.score = 0;
@@ -710,6 +765,16 @@ function resetField(w: World) {
   w.linkCd = 0;
 }
 
+/** Adds to a lifetime counter and pays out any achievement that it completes. */
+function note(w: World, key: string, n = 1, max = false) {
+  const now = w.meta.tally[key] ?? 0;
+  w.meta.tally[key] = max ? Math.max(now, n) : now + n;
+  for (const f of claimFeats(w.meta)) {
+    w.toasts.push({ text: `${f.name.toUpperCase()}  +$${f.cash}`, life: 3.2 });
+    w.cues.push("clean");
+  }
+}
+
 /** The ship a pilot is flying: the wingman has a hangar slot of their own. */
 export function shipOf(w: World, p: Player) {
   return skinDef(p === w.wing ? w.meta.skin2 : w.meta.skin);
@@ -732,9 +797,12 @@ function parkPlayer(w: World, snap: RunSnap | null) {
   p.sec = 0;
   p.buddy = 0;
   p.magnet = 0;
+  p.rush = 0;
+  p.star = 0;
   p.splat = 0;
   p.slow = 0;
   p.insured = !w.arcade && w.meta.upgrades.insurance > 0;
+  note(w, `gun_${p.family}`);
   p.down = false;
   p.revive = 0;
   p.inv = 1.35;
@@ -914,7 +982,8 @@ export function startOrResume(w: World) {
 
 export function nextLevel(w: World) {
   if (w.arcade) {
-    w.arcadeStage = Math.min(30, w.arcadeStage + 1);
+    // the Daily run stops at stage 30; plain Arcade keeps lapping until you are out of lives
+    w.arcadeStage = w.daily ? Math.min(30, w.arcadeStage + 1) : w.arcadeStage + 1;
     const spec = arcadeStage(w.arcadeStage);
     startSortie(w, {
       level: spec.level,
@@ -993,6 +1062,7 @@ function launchLevel(w: World) {
     vx: s.vx,
     spin: s.spin,
     line: s.line,
+    entry: s.entry,
   }));
   grant(list, n);
   w.spawns = list;
@@ -1034,6 +1104,7 @@ function spawnEnemy(
   value = 0,
   role = "",
   line = Number.NaN,
+  entry = 0,
 ) {
   const level = Math.max(1, w.level);
   const ch = Math.min(9, Math.floor((level - 1) / 10));
@@ -1049,6 +1120,8 @@ function spawnEnemy(
   if (role === "hermit") hp = Math.max(4, Math.ceil(hp * 0.6));
   // two guns on the field: critters take a third more, bosses half as much again
   if (w.coop) hp = Math.ceil(hp * (kind === "boss" ? 1.5 : 1.35));
+  if (kind !== "boss") hp = Math.ceil(hp * tuning(w).hp);
+  else hp = Math.round(hp * (1 + (tuning(w).hp - 1) * 0.6));
   if (role === "chip" || role === "rain" || role === "spore") hp = 1;
   if (role === "forge") {
     /* plate is the armor */
@@ -1084,6 +1157,29 @@ function spawnEnemy(
     hide: role === "hermit" ? 1.2 : 0,
     size,
   });
+  if (entry > 0 && oy !== undefined && oy > 0) {
+    // Fly in along a curve instead of dropping from the top: the critter is placed at
+    // its slot and carries an offset that shrinks to nothing over the fly-in.
+    const e = w.enemies[w.enemies.length - 1];
+    const W = WORLD_W;
+    const H = WORLD_H;
+    const leftSide = x < W / 2;
+    // start point and the point the curve bends toward, in world coordinates
+    let sx = 0;
+    let sy = 0;
+    let bx = 0;
+    let by = 0;
+    const kind2 = entry === 5 ? (leftSide ? 1 : 2) : entry === 6 ? (leftSide ? 2 : 1) : entry;
+    if (kind2 === 1) [sx, sy, bx, by] = [-60, H * 0.42, W * 0.3, -H * 0.05];
+    else if (kind2 === 2) [sx, sy, bx, by] = [W + 60, H * 0.42, W * 0.7, -H * 0.05];
+    else if (kind2 === 3) [sx, sy, bx, by] = [W * 0.15, -60, W * 0.95, H * 0.46];
+    else if (kind2 === 4) [sx, sy, bx, by] = [W * 0.85, -60, W * 0.05, H * 0.46];
+    else [sx, sy, bx, by] = [W / 2, -60, x, H * 0.34];
+    e.y = oy;
+    e.path = { hx: x, hy: oy, dx: sx - x, dy: sy - oy, cx: bx - x, cy: by - oy, u: 0, dur: 1.55 };
+    e.x = sx;
+    e.y = sy;
+  }
   w.born += 1;
   const id = role || kind;
   if (!w.meta.seen.includes(id)) w.meta.seen.push(id);
@@ -1171,7 +1267,7 @@ function addScore(w: World, base: number, x: number, y: number, show: boolean) {
 
 function bank(w: World, amount: number, x: number, y: number, show: boolean) {
   const cart = Math.max(shipOf(w, w.player).cash ?? 1, w.wing ? (shipOf(w, w.wing).cash ?? 1) : 1);
-  const n = Math.max(1, Math.round(amount * cart * (w.arcade ? 0.5 : salvageMul(w.meta.upgrades.salvage))));
+  const n = Math.max(1, Math.round(amount * cart * tuning(w).pay * (w.arcade ? 0.5 : salvageMul(w.meta.upgrades.salvage))));
   if (w.arcade) w.purse += n;
   else w.meta.dollars += n;
   if (show) {
@@ -1203,6 +1299,16 @@ function killEnemy(w: World, e: Enemy) {
     float(w, e.x, e.y - 22, lookName(e.look).toUpperCase(), true);
     if (w.rng() < 0.25) float(w, e.x, e.y - 40, LAST_WORDS[Math.floor(w.rng() * LAST_WORDS.length)] ?? "WORTH IT");
   }
+  if (e.role !== "chip" && e.role !== "spore" && e.role !== "rain") note(w, "kills");
+  if (e.kind === "boss") {
+    // whatever it had marked dies with it
+    w.hazards = w.hazards.filter((h) => h.kind !== "strike" && h.kind !== "sweep");
+    if (!w.arcade) {
+      note(w, `boss${e.ch}`);
+      if (w.bombsUsed === 0) note(w, "bossNoBomb");
+      if (e.ch === 9 && (w.meta.loop ?? 0) > 0) note(w, "loopKing");
+    }
+  }
   if (e.kind === "boss") {
     if (e.ch === 9) {
       w.banner = "IT WAS A TOILET THE WHOLE TIME.";
@@ -1221,6 +1327,7 @@ function killEnemy(w: World, e: Enemy) {
     w.duck = true;
     dropPickup(w, "D", e.x, e.y, 0);
   }
+  if (e.role === "bonus" && w.rng() < 0.45) dropPickup(w, "F", e.x, e.y, 5 + Math.floor(w.level * 0.25));
   if (e.role === "splash") {
     // Auto-Flush: goes out with a splash, a low fan of slow shots straight down
     for (let i = -2; i <= 2; i++) pushHostile(w, e.x, e.y, Math.PI / 2 + i * 0.3, 150, 5, 0);
@@ -1242,7 +1349,7 @@ function killEnemy(w: World, e: Enemy) {
     if (w.rng() < chance && w.pickups.length < 3) {
       const roll = w.rng();
       const kind: PickupKind =
-        roll < 0.34 ? "W" : roll < 0.52 ? "M" : roll < 0.67 ? "S" : roll < 0.79 ? "B" : roll < 0.84 ? "G" : roll < 0.89 ? "Y" : roll < 0.905 ? "L" : "$";
+        roll < 0.33 ? "W" : roll < 0.5 ? "M" : roll < 0.63 ? "S" : roll < 0.74 ? "B" : roll < 0.79 ? "G" : roll < 0.84 ? "Y" : roll < 0.89 ? "C" : roll < 0.91 ? "T" : roll < 0.925 ? "L" : "$";
       dropPickup(w, kind, e.x, e.y, kind === "$" ? 5 + Math.floor(w.level * 0.3) : 0);
     }
   }
@@ -1317,6 +1424,7 @@ function takePickup(w: World, kind: PickupKind, value: number, who: Player = w.p
       w.cues.push("drive");
       float(w, p.x, p.y - 28, "AFTERBURNER", true);
     }
+    note(w, `gun_${p.family}`);
     cheer(w, p.x, p.y, familyColor(family));
   } else if (kind === "S") {
     p.shield = true;
@@ -1352,6 +1460,20 @@ function takePickup(w: World, kind: PickupKind, value: number, who: Player = w.p
     w.cues.push("pickup");
     float(w, p.x, p.y - 28, "MAGNET", true);
     cheer(w, p.x, p.y, "#e9463f");
+  } else if (kind === "F") {
+    // bonus-round snacks: nothing but cash, and the only place food falls
+    bank(w, value || 6, p.x, p.y, true);
+  } else if (kind === "C") {
+    p.rush = 9;
+    w.cues.push("drive");
+    float(w, p.x, p.y - 28, "COFFEE – FIRE RATE UP", true);
+    cheer(w, p.x, p.y, "#c9a24a");
+  } else if (kind === "T") {
+    p.star = 6;
+    p.inv = Math.max(p.inv, 6);
+    w.cues.push("shield");
+    float(w, p.x, p.y - 28, "STAR – NOTHING CAN TOUCH YOU", true);
+    cheer(w, p.x, p.y, "#f4f1ea");
   } else if (kind === "Y") {
     p.buddy = 18;
     w.cues.push("pickup");
@@ -1361,6 +1483,7 @@ function takePickup(w: World, kind: PickupKind, value: number, who: Player = w.p
     w.freeze = w.bossUp ? 1.5 : 3;
     w.cues.push("pickup");
     float(w, p.x, p.y - 28, "RUBBER DUCK – EVERYONE STOPS TO LOOK", true);
+    note(w, "ducks");
   } else {
     w.chain = Math.min(40, w.chain + 8);
     w.chainT = 2.1;
@@ -1378,8 +1501,9 @@ function dropPickup(w: World, kind: PickupKind, x: number, y: number, value = 0)
   if (kind === "W") {
     const mine = FAMILIES.indexOf(nearestPilot(w, x, y).family);
     hue = w.rng() < 0.55 ? Math.max(0, mine) : Math.floor(w.rng() * FAMILIES.length);
-  } else if (kind === "M") hue = Math.floor(w.rng() * 3);
-  w.pickups.push({ kind, x, y, vx: dir * (12 + w.rng() * 16), vy: 70 + w.rng() * 40, value: hue ?? value, rest: 0, hue });
+  } else if (kind === "M" || kind === "F") hue = Math.floor(w.rng() * 3);
+  // food keeps its cash value; for gifts and crates the value says which one it is
+  w.pickups.push({ kind, x, y, vx: dir * (12 + w.rng() * 16), vy: 70 + w.rng() * 40, value: kind === "F" ? value : (hue ?? value), rest: 0, hue });
 }
 
 function stepPickups(w: World, dt: number) {
@@ -1587,7 +1711,7 @@ function firePlayer(w: World, p: Player, focus: boolean) {
   }
   p.muzzle = 0.05;
   const trig = 1 - (w.arcade ? 0 : w.meta.upgrades.trigger * 0.1);
-  p.fireCd = Math.max(0.05, pack.cd * trig * ship.rate * (feed ? 0.7 : 1));
+  p.fireCd = Math.max(0.05, pack.cd * trig * ship.rate * (feed ? 0.7 : 1) * (p.rush > 0 ? 0.68 : 1));
 }
 
 /** The second weapon: whatever the last ammo crate was, one shot per press while ammo lasts. */
@@ -1723,6 +1847,7 @@ function releaseShot(w: World, e: Enemy) {
   const aim = Math.atan2(who.y - e.y, who.x - e.x);
   const down = Math.PI / 2;
   const budget = fireBudget(w.level, WORLD_W);
+  budget.speed *= tuning(w).speed;
   const roll = w.rng();
   // the Security Camera watches you: it always aims, and its shots are quicker
   const watching = e.role === "watcher";
@@ -1751,7 +1876,7 @@ function releaseShot(w: World, e: Enemy) {
 
 function budgetShots(w: World, dt: number) {
   const rules = fireBudget(w.level, WORLD_W);
-  const crowd = w.coop ? 1.25 : 1;
+  const crowd = (w.coop ? 1.25 : 1) * tuning(w).heat;
   w.budget += rules.rate * crowd * dt;
   if (w.budget < 1 || hostileCount(w) >= rules.cap * crowd) return;
   const crew = living(w);
@@ -1759,6 +1884,8 @@ function budgetShots(w: World, dt: number) {
   const who = crew[0];
   const pool = w.enemies.filter((e) => {
     if (e.hp <= 0 || e.kind === "boss" || e.warn > 0 || e.fire > 0) return false;
+    // nobody shoots while still looping in to their place
+    if (e.path) return false;
     if (hermitHidden(e)) return false;
     if (e.role === "ghost" && Math.sin(e.t * 2.4) < 0) return false;
     if (!mayShoot(e.kind, e.role, w.level, e.look)) return false;
@@ -1775,6 +1902,13 @@ function runBoss(w: World, e: Enemy) {
   const who = nearestPilot(w, e.x, e.y);
   const aim = Math.atan2(who.y - e.y, who.x - e.x);
   const cmds = bossScript(e.ch, e.mark, e.t, aim, WORLD_W);
+  // every fourth volley is the boss's own attack, announced by name the first time
+  e.sig = (e.sig ?? 0) + 1;
+  if (e.sig % 4 === 0 && e.dash === undefined) {
+    const own = bossSignature(e.ch, e.mark, e.sig / 4 - 1, who.x, WORLD_W);
+    cmds.push({ op: "banner", text: own.name }, ...own.cmds);
+    w.cues.push("boss");
+  }
   const special = Math.floor(e.t) % 5 === 0;
   for (const cmd of cmds) {
     // boss shots do not split: its rings are dense enough already
@@ -1788,6 +1922,15 @@ function runBoss(w: World, e: Enemy) {
         w.bannerT = 1.2;
       }
     } else if (cmd.op === "clear") cashBullets(w);
+    else if (cmd.op === "lane") {
+      const half = cmd.w / 2 + 6;
+      const wait = cmd.wait * tuning(w).warn;
+      w.hazards.push({ kind: "strike", x: clamp(who.x + cmd.dx, half, WORLD_W - half), y: WORLD_H / 2, w: cmd.w, h: WORLD_H, hp: 1, vx: 0, vy: 0, t: wait, phase: wait });
+    } else if (cmd.op === "band") {
+      const y = clamp(who.y + cmd.dy, laneTop() + cmd.h / 2, WORLD_H - 36 - cmd.h / 2 + 30);
+      const wait = cmd.wait * tuning(w).warn;
+      w.hazards.push({ kind: "sweep", x: WORLD_W / 2, y, w: WORLD_W, h: cmd.h, hp: 1, vx: 0, vy: 0, t: wait, phase: wait });
+    } else if (cmd.op === "drop") pushHostile(w, cmd.x, -8, Math.PI / 2, cmd.speed, 5, cmd.shape, true);
     else if (cmd.op === "dive" && special && e.dash === undefined) {
       e.dash = 0;
       e.dashX = clamp(who.x, edgeOf("boss"), WORLD_W - edgeOf("boss"));
@@ -1921,6 +2064,10 @@ function present(w: World, dt: number, timers: boolean) {
     r.r += (r.max > 0.3 ? 260 : 110) * dt;
   }
   w.rings = w.rings.filter((r) => r.life > 0);
+  if (w.toasts.length) {
+    w.toasts[0].life -= dt;
+    if (w.toasts[0].life <= 0) w.toasts.shift();
+  }
   for (const p of w.puffs) p.life -= dt;
   w.puffs = w.puffs.filter((p) => p.life > 0);
   for (const a of w.arcs) a.life -= dt;
@@ -1934,7 +2081,51 @@ function present(w: World, dt: number, timers: boolean) {
 }
 
 function moveEnemy(w: World, e: Enemy, dt: number) {
+  const path = e.path;
+  if (!path) {
+    holdPlace(w, e, dt);
+    if (e.lean) e.lean *= Math.max(0, 1 - 8 * dt);
+    return;
+  }
+  const wasX = e.x;
+  // still flying in: move the slot as usual, then lay the shrinking offset on top
+  e.x = path.hx;
+  e.y = path.hy;
+  holdPlace(w, e, dt);
+  path.hx = e.x;
+  path.hy = e.y;
+  path.u += dt / path.dur;
+  if (path.u >= 1 || e.motion === "dive") {
+    e.path = undefined;
+    return;
+  }
+  const u = path.u * path.u * (3 - 2 * path.u);
+  const a = (1 - u) * (1 - u);
+  const b = 2 * u * (1 - u);
+  e.x += a * path.dx + b * path.cx;
+  e.y += a * path.dy + b * path.cy;
+  e.lean = clamp((e.x - wasX) / Math.max(dt, 1e-4) / 520, -0.6, 0.6);
+}
+
+function holdPlace(w: World, e: Enemy, dt: number) {
   e.t += dt;
+  // The last one or two critters of a level do not get to sit at the top of the screen
+  // out of reach: they come down for the pilot, again and again, until somebody wins.
+  if (
+    w.spawns.length === 0 &&
+    w.enemies.length <= 2 &&
+    e.t > 6 &&
+    !e.path &&
+    e.kind !== "boss" &&
+    e.kind !== "cruiser" &&
+    e.role !== "bonus" &&
+    (e.motion === "rank" || e.motion === "sine" || e.motion === "swoop" || e.motion === "spiral" || e.motion === "zigzag")
+  ) {
+    e.motion = "dive";
+    e.warn = 0.55;
+    e.flash = 0.55;
+    e.ox = clamp(e.x, edgeOf(e.kind), WORLD_W - edgeOf(e.kind));
+  }
   if (e.motion === "boss") {
     // low enough that the big sprites clear the health bar at the top of the screen
     const nest = 110 + 42 * (e.size ?? 1);
@@ -2058,7 +2249,7 @@ function moveEnemy(w: World, e: Enemy, dt: number) {
     const chance = w.level < 4 ? 0 : 0.1 + 0.25 * d;
     if (w.rng() < chance * dt * 0.15) {
       const divers = w.enemies.reduce((n, o) => n + (o.motion === "dive" ? 1 : 0), 0);
-      if (divers < 1 + Math.floor(w.level / 25) && e.y > 30) {
+      if (divers < 1 + Math.floor(w.level / 25) && e.y > 30 && !e.path) {
         e.motion = "dive";
         e.warn = 0.55;
         e.flash = 0.55;
@@ -2096,6 +2287,20 @@ function stepHazards(w: World, dt: number) {
       }
     } else if (h.kind === "flare" && h.t < 0 && h.t > -1.5) {
       for (const p of living(w)) if (Math.abs(p.y - h.y) < h.h / 2 && p.inv <= 0) hurtPlayer(w, p);
+    } else if (h.kind === "strike" || h.kind === "sweep") {
+      // a boss's marked column or strip: it strikes for a quarter of a second, then it is gone
+      if (h.t < 0 && h.t > -STRIKE_TIME) {
+        for (const p of living(w)) {
+          if (p.inv > 0) continue;
+          const inside = h.kind === "strike" ? Math.abs(p.x - h.x) < h.w / 2 + 4 : Math.abs(p.y - h.y) < h.h / 2 + 4;
+          if (inside) hurtPlayer(w, p);
+        }
+        if (h.hp > 0) {
+          h.hp = 0;
+          addTrauma(w, 0.35);
+          w.cues.push("big");
+        }
+      } else if (h.t <= -STRIKE_TIME) h.kind = "dead";
     } else if (h.kind === "bolt" && h.t < 0 && h.t > -0.2) {
       for (const p of living(w)) if (Math.abs(p.x - h.x) < h.w && p.inv <= 0) hurtPlayer(w, p);
     } else if (h.kind === "cloud") {
@@ -2130,6 +2335,8 @@ function stepHazards(w: World, dt: number) {
 }
 
 export const DASH_WARN = 0.9;
+/** How long a boss's marked column or strip stays deadly once it strikes. */
+export const STRIKE_TIME = 0.25;
 
 function edgeOf(kind: Kind) {
   if (kind === "boss") return Math.min(96, Math.max(64, WORLD_W * 0.1));
@@ -2241,6 +2448,8 @@ function drivePilot(w: World, p: Player, fly: Fly, dt: number) {
   p.fireCd -= dt;
   p.buddy = Math.max(0, p.buddy - dt);
   p.magnet = Math.max(0, p.magnet - dt);
+  p.rush = Math.max(0, p.rush - dt);
+  p.star = Math.max(0, p.star - dt);
   if (fire && p.fireCd <= 0) firePlayer(w, p, focus);
   tryMissile(w, p, fly.alt, dt);
 }
@@ -2263,6 +2472,7 @@ function teamwork(w: World, dt: number) {
     const near = Math.hypot(fallen.x - friend.x, fallen.y - friend.y) < REVIVE_REACH;
     fallen.revive = near ? (fallen.revive ?? 0) + dt : Math.max(0, (fallen.revive ?? 0) - dt * 0.6);
     if ((fallen.revive ?? 0) >= REVIVE_TIME) {
+      note(w, "revives");
       fallen.down = false;
       fallen.alive = true;
       fallen.lives = 1;
@@ -2361,7 +2571,7 @@ export function step(w: World, dt: number, input: InputState) {
     else {
       w.spawns = w.spawns.filter((s) => {
         if (w.spawnClock >= s.at) {
-          spawnEnemy(w, s.kind, s.x, s.motion, s.drop, -28, s.vx ?? 0, s.spin, s.oy, s.value ?? 0, s.role ?? "", s.line);
+          spawnEnemy(w, s.kind, s.x, s.motion, s.drop, -28, s.vx ?? 0, s.spin, s.oy, s.value ?? 0, s.role ?? "", s.line, s.entry ?? 0);
           return false;
         }
         return true;
@@ -2619,6 +2829,8 @@ function finishLevel(w: World) {
   w.pickups = w.pickups.filter((pk) => pk.y > 9000);
   const noBomb = w.bombsUsed === 0;
   const boss = isBossLevel(w.level);
+  if (w.perfect && !w.arcade) note(w, "perfect");
+  if (w.arcade && !w.daily) note(w, "arcade", w.arcadeStage, true);
   const fast = boss && w.clock <= fastKillLimit(w.level);
   if (w.perfect && w.arcade) w.score += 5000;
   if (fast) {
@@ -2654,7 +2866,7 @@ function finishLevel(w: World) {
   w.meta.best = Math.max(w.meta.best, w.best);
   w.bannerT = 0;
   if (w.arcade) {
-    if (w.arcadeStage >= 30 || w.level >= LEVELS) {
+    if (w.daily && (w.arcadeStage >= 30 || w.level >= LEVELS)) {
       const pay = Math.round(w.purse);
       w.meta.dollars += pay;
       w.clearCash = pay;

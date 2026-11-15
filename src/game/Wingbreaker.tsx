@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { DollarSign } from "lucide-react";
 import { Sfx } from "./audio";
 import { Music } from "./music";
-import { chapterOf, CHAPTERS, GUN_PRICE, quipFor, SKINS, UPGRADE_LIST, starTotal, type SkinId, type UpgradeId } from "./meta";
+import { chapterOf, CHAPTERS, DIFFICULTY, FEATS, GUN_PRICE, quipFor, SKINS, UPGRADE_LIST, starTotal, type SkinId, type UpgradeId } from "./meta";
 import { CREDITS, FAMILIES, GUIDE, TIPS, daySeed, familyBlurb, familyName, type GunFamily } from "./v3";
 
 const GIFT_ART: Record<GunFamily, string> = {
@@ -31,6 +31,8 @@ import {
   saveNow,
   setAutoFire,
   setAutoNext,
+  setDifficulty,
+  newLoop,
   setCoarsePointer,
   setMuted,
   setReduceMotion,
@@ -80,6 +82,10 @@ type Ui = {
   quip: string;
   autoFire: boolean;
   autoNext: boolean;
+  difficulty: number;
+  loop: number;
+  daily: boolean;
+  feats: string[];
   stars: number;
   music: number;
   sfx: number;
@@ -128,6 +134,10 @@ function readUi(world: World, muted: boolean): Ui {
     quip: quipFor(world.level),
     autoFire: world.meta.autoFire === true,
     autoNext: world.meta.autoAdvance === true,
+    difficulty: world.meta.difficulty ?? 1,
+    loop: world.meta.loop ?? 0,
+    daily: world.daily,
+    feats: world.meta.feats,
     stars: starTotal(world.meta),
     music: world.meta.music,
     sfx: world.meta.sfx,
@@ -213,6 +223,10 @@ export function Wingbreaker() {
     quip: quipFor(1),
     autoFire: false,
     autoNext: false,
+    difficulty: 1,
+    loop: 0,
+    daily: false,
+    feats: [],
     stars: 0,
     music: 55,
     sfx: 80,
@@ -690,7 +704,7 @@ export function Wingbreaker() {
         steps += 1;
       }
       if (shotGate === 1) {
-        sfx.shot(world.player.weapon, world.player.feed > 0, world.player.x / WORLD_W * 2 - 1);
+        sfx.shot(world.player.weapon, world.player.feed > 0, world.player.x / WORLD_W * 2 - 1, world.player.family);
         shotGate = 0;
       }
       let killed = false;
@@ -827,6 +841,7 @@ export function Wingbreaker() {
             <p className="flex flex-wrap gap-x-4 gap-y-1 font-display text-sm tracking-[0.16em] text-muted">
               <span>
                 LEVEL <span className="text-ink">{String(ui.mission).padStart(3, "0")}</span>/100
+                {ui.loop > 0 && <span className="text-ember"> · NEW GAME+{ui.loop > 1 ? ` ${ui.loop}` : ""}</span>}
               </span>
               <span>
                 <span className="text-ember">★</span> <span className="text-ink">{ui.stars}</span>
@@ -889,11 +904,11 @@ export function Wingbreaker() {
             <div className="grid grid-cols-2 gap-2">
               {(
                 [
-                  ["ARCADE", "30 stages, no continues", () => act((w) => startArcade(w, false))],
+                  ["ARCADE", "No continues, no end", () => act((w) => startArcade(w, false))],
                   ["DAILY", ui.dailyPlayed ? "Training run" : "One official run a day", () => act((w) => startArcade(w, true))],
                   ["LEVELS", `${ui.stars} of 300 stars`, () => act((w) => openMode(w, "levels"))],
                   ["SHOP", `$${money} to spend`, () => act((w) => openMode(w, "shop"))],
-                  ["RANKS", "Arcade top ten", () => act((w) => openMode(w, "ranks"))],
+                  ["RANKS", "Top ten and achievements", () => act((w) => openMode(w, "ranks"))],
                   [
                     "OPTIONS",
                     "Sound, keys, field guide",
@@ -930,6 +945,22 @@ export function Wingbreaker() {
             <p className="text-sm text-muted">
               You are on level {String(ui.mission).padStart(3, "0")}. A new game goes back to the first level. Your cash, upgrades, ships and stars stay.
             </p>
+            <div className="grid grid-cols-3 gap-2">
+              {DIFFICULTY.map((d, i) => (
+                <button
+                  key={d.name}
+                  type="button"
+                  aria-pressed={ui.difficulty === i}
+                  className={`flex h-10 items-center justify-center border font-display text-sm tracking-[0.14em] ${
+                    ui.difficulty === i ? "border-ember bg-ember/15 text-ember" : "border-line bg-bg/70 text-muted hover:text-ink"
+                  }`}
+                  onClick={() => act((w) => setDifficulty(w, i))}
+                >
+                  {d.name}
+                </button>
+              ))}
+            </div>
+            <p className="text-xs text-muted">{DIFFICULTY[ui.difficulty]?.blurb}</p>
             <button
               type="button"
               className="flex h-14 w-full items-center justify-between border border-ember bg-ember px-5 font-display text-xl font-semibold tracking-[0.16em] text-bg hover:brightness-110"
@@ -1083,6 +1114,13 @@ export function Wingbreaker() {
               <span>AUTO FIRE</span>
               <span className="text-sm text-muted">{ui.autoFire ? "ON" : "OFF"}</span>
             </button>
+            <button type="button" className={`${row} h-auto min-h-12 py-2`} onClick={() => act((w) => setDifficulty(w, ((w.meta.difficulty ?? 1) + 1) % 3))}>
+              <span className="min-w-0">
+                <span className="block">DIFFICULTY</span>
+                <span className="block text-xs normal-case tracking-normal text-muted">{DIFFICULTY[ui.difficulty]?.blurb}</span>
+              </span>
+              <span className="shrink-0 text-sm text-ember">{DIFFICULTY[ui.difficulty]?.name}</span>
+            </button>
             <button type="button" className={row} onClick={() => act((w) => setAutoNext(w, !w.meta.autoAdvance))}>
               <span>AUTO NEXT</span>
               <span className="text-sm text-muted">{ui.autoNext ? "ON" : "OFF"}</span>
@@ -1210,7 +1248,7 @@ export function Wingbreaker() {
         <div className="absolute inset-0 z-20 flex items-center justify-center bg-bg/60 backdrop-blur-[2px]">
           <div className="menu-rise flex w-[min(92vw,400px)] flex-col gap-2 border border-line bg-bg/85 px-5 py-5">
             <p className="font-display text-xs tracking-[0.32em] text-muted">
-              {ui.arcade ? `ARCADE · STAGE ${ui.arcadeStage}/30` : `${ui.chapter.toUpperCase()} · LEVEL ${String(ui.level).padStart(3, "0")}`}
+              {ui.arcade ? (ui.daily ? `DAILY · STAGE ${ui.arcadeStage}/30` : `ARCADE · STAGE ${ui.arcadeStage}`) : `${ui.chapter.toUpperCase()} · LEVEL ${String(ui.level).padStart(3, "0")}`}
             </p>
             <h2 className="font-display text-4xl leading-none font-semibold tracking-wide">
               {!ui.arcade && ui.level % 10 === 0 ? "CHAPTER CLEAR" : ui.perfect && ui.slain >= ui.born ? "CLEAN SWEEP" : "LEVEL CLEAR"}
@@ -1296,7 +1334,7 @@ export function Wingbreaker() {
         <div className="absolute inset-0 z-20 flex items-center justify-center bg-bg/70">
           <div className="flex w-[min(92vw,420px)] flex-col gap-2 px-5">
             <p className="font-display text-sm tracking-[0.28em] text-muted">LEVEL 100</p>
-            <h2 className="font-display text-4xl tracking-wide">WATCH BROKEN</h2>
+            <h2 className="font-display text-4xl tracking-wide">THE EMPIRE HAS FALLEN</h2>
             <p className="font-display text-3xl">{String(ui.score).padStart(6, "0")}</p>
             <p className="text-sm text-muted">The Toilet King does not come back. The hangar stays.</p>
             <div className="max-h-40 space-y-1 overflow-hidden text-xs italic text-cold">
@@ -1307,8 +1345,19 @@ export function Wingbreaker() {
             <button type="button" className={row} onClick={() => act((w) => openMode(w, "menu"))}>
               <span>MENU</span>
             </button>
+            <button
+              type="button"
+              className="flex h-14 w-full items-center justify-between border border-ember bg-ember px-5 text-left font-display text-xl font-semibold tracking-[0.16em] text-bg hover:brightness-110"
+              onClick={() => act((w) => newLoop(w))}
+            >
+              <span>NEW GAME+</span>
+              <span className="text-right text-xs font-medium leading-tight tracking-[0.1em]">
+                <span className="block">TOUGHER CRITTERS</span>
+                <span className="block">+50% CASH</span>
+              </span>
+            </button>
             <button type="button" className={row} onClick={() => act((w) => newMission(w))}>
-              <span>NEW RUN</span>
+              <span>START OVER</span>
             </button>
           </div>
         </div>
@@ -1400,6 +1449,22 @@ export function Wingbreaker() {
                 <span className="text-ember">{String(rank.score).padStart(6, "0")} · {rank.stage}</span>
               </p>
             ))}
+            <h2 className="mt-4 font-display text-4xl tracking-wide">ACHIEVEMENTS</h2>
+            <p className="text-sm text-muted">
+              {ui.feats.length} of {FEATS.length} earned. Each one pays cash the moment you earn it.
+            </p>
+            {FEATS.map((f) => {
+              const got = ui.feats.includes(f.id);
+              return (
+                <div key={f.id} className={`flex items-center justify-between gap-3 border px-3 py-2 ${got ? "border-ember/70 bg-ember/10" : "border-line bg-bg/60"}`}>
+                  <span className="min-w-0">
+                    <span className={`block font-display text-base tracking-[0.1em] ${got ? "text-ink" : "text-muted"}`}>{f.name.toUpperCase()}</span>
+                    <span className="block text-xs text-muted">{f.blurb}</span>
+                  </span>
+                  <span className={`shrink-0 font-display text-sm ${got ? "text-ember" : "text-muted"}`}>{got ? "DONE" : `$${f.cash}`}</span>
+                </div>
+              );
+            })}
             <button type="button" className={row} onClick={() => act((w) => openMode(w, "menu"))}>
               <span>MENU</span>
             </button>

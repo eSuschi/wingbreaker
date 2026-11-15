@@ -38,6 +38,14 @@ export type Campaign = {
   shake: boolean;
   /** true: the next level starts by itself. Off by default: the player presses NEXT. */
   autoAdvance: boolean;
+  /** 0 easy, 1 normal, 2 hard */
+  difficulty: number;
+  /** how many times the campaign has been finished and started over as New Game+ */
+  loop: number;
+  /** achievements earned so far */
+  feats: string[];
+  /** lifetime counters the achievements are measured against */
+  tally: Record<string, number>;
   autoFire: boolean | null;
   crew: "solo" | "coop";
   music: number;
@@ -290,6 +298,10 @@ export function freshCampaign(): Campaign {
     mute: false,
     shake: true,
     autoAdvance: false,
+    difficulty: 1,
+    loop: 0,
+    feats: [],
+    tally: {},
     autoFire: null,
     crew: "solo",
     music: 55,
@@ -383,6 +395,16 @@ function sanitize(raw: Partial<Campaign> | null | undefined, legacyBest: number)
     mute: Boolean(raw.mute),
     shake: raw.shake !== false,
     autoAdvance: raw.autoAdvance === true,
+    difficulty: clampInt(raw.difficulty, 0, 2, 1),
+    loop: clampInt(raw.loop, 0, 99, 0),
+    feats: Array.isArray(raw.feats) ? raw.feats.filter((f): f is string => typeof f === "string").slice(0, 100) : [],
+    tally: (() => {
+      const out: Record<string, number> = {};
+      if (raw.tally && typeof raw.tally === "object") {
+        for (const [k, v] of Object.entries(raw.tally)) if (typeof v === "number" && Number.isFinite(v)) out[k.slice(0, 24)] = Math.max(0, Math.floor(v));
+      }
+      return out;
+    })(),
     autoFire: typeof raw.autoFire === "boolean" ? raw.autoFire : null,
     crew: raw.crew === "coop" ? "coop" : "solo",
     music: clampInt(raw.music, 0, 100, 55),
@@ -509,7 +531,8 @@ export function loadoutOf(c: Campaign) {
   const cap = c.upgrades.capacitor > 0 ? 1 : 0;
   const ship = skinDef(c.skin);
   return {
-    lives: Math.max(1, 3 + c.upgrades.hull + ship.lives),
+    // easy mode flies with one life more
+    lives: Math.max(1, 3 + c.upgrades.hull + ship.lives + (c.difficulty === 0 ? 1 : 0)),
     bombs: 2 + c.upgrades.magazine + ship.bombs,
     weapon: Math.min(6, 1 + cap + wings),
     missiles: Math.min(6, (c.upgrades.salvo || 0) * 2),
@@ -552,4 +575,45 @@ export function equipGun(c: Campaign, family: GunFamily) {
 
 export function gunName(level: number, family: GunFamily = "bubble") {
   return familyName(family, Math.max(1, Math.min(6, Math.round(level) || 1)), false);
+}
+
+export const DIFFICULTY = [
+  { name: "EASY", blurb: "Less poop, slower poop, one more life. Pays 20% less." },
+  { name: "NORMAL", blurb: "The game as it was meant." },
+  { name: "HARD", blurb: "More poop, faster, tougher critters, shorter warnings. Pays 25% more." },
+];
+
+/** An achievement: what it is called, what earns it and what it pays. */
+export type Feat = { id: string; name: string; blurb: string; cash: number; done: (c: Campaign) => boolean };
+
+const count = (c: Campaign, key: string) => c.tally[key] ?? 0;
+
+export const FEATS: Feat[] = [
+  { id: "first_flush", name: "First Flush", blurb: "Beat the Armored Cistern.", cash: 150, done: (c) => count(c, "boss0") > 0 },
+  { id: "plumber", name: "Apprentice Plumber", blurb: "Shoot down 500 of them.", cash: 200, done: (c) => count(c, "kills") >= 500 },
+  { id: "exterminator", name: "Master Plumber", blurb: "Shoot down 5,000 of them.", cash: 800, done: (c) => count(c, "kills") >= 5000 },
+  { id: "clean_hands", name: "Clean Hands", blurb: "Finish 10 levels without being hit.", cash: 300, done: (c) => count(c, "perfect") >= 10 },
+  { id: "spotless", name: "Spotless", blurb: "Finish 50 levels without being hit.", cash: 1000, done: (c) => count(c, "perfect") >= 50 },
+  { id: "dry_run", name: "Dry Run", blurb: "Beat a boss without using a bomb.", cash: 250, done: (c) => count(c, "bossNoBomb") > 0 },
+  { id: "arsenal", name: "Full Cabinet", blurb: "Fly with all six guns at least once.", cash: 300, done: (c) => ["bubble", "soap", "paste", "zap", "flush", "mist"].every((g) => count(c, `gun_${g}`) > 0) },
+  { id: "quack", name: "Quack", blurb: "Catch 10 rubber ducks.", cash: 200, done: (c) => count(c, "ducks") >= 10 },
+  { id: "wingman", name: "Never Leave a Wingman", blurb: "Pick your partner back up 5 times.", cash: 300, done: (c) => count(c, "revives") >= 5 },
+  { id: "fleet", name: "Fleet Admiral", blurb: "Own six ships.", cash: 500, done: (c) => c.owned.length >= 6 },
+  { id: "halfway", name: "Halfway Down the Pipe", blurb: "Beat the Fridge Titan.", cash: 500, done: (c) => count(c, "boss4") > 0 },
+  { id: "arcade10", name: "Ten in a Row", blurb: "Reach stage 10 in Arcade.", cash: 300, done: (c) => count(c, "arcade") >= 10 },
+  { id: "arcade30", name: "Full Lap", blurb: "Reach stage 30 in Arcade.", cash: 1000, done: (c) => count(c, "arcade") >= 30 },
+  { id: "royal_flush", name: "Royal Flush", blurb: "Beat the Toilet King.", cash: 1500, done: (c) => count(c, "boss9") > 0 },
+  { id: "again", name: "Again, But Worse", blurb: "Beat the Toilet King in New Game+.", cash: 3000, done: (c) => count(c, "loopKing") > 0 },
+];
+
+/** Hands out every achievement that has just been earned and returns them. */
+export function claimFeats(c: Campaign): Feat[] {
+  const fresh: Feat[] = [];
+  for (const f of FEATS) {
+    if (c.feats.includes(f.id) || !f.done(c)) continue;
+    c.feats.push(f.id);
+    c.dollars += f.cash;
+    fresh.push(f);
+  }
+  return fresh;
 }

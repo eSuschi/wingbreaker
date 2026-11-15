@@ -74,11 +74,43 @@ export class Sfx {
     src.stop(t + dur + 0.02);
   }
 
-  shot(level: number, hot: boolean, pan = 0) {
+  /** Every gun has a voice of its own; more power makes it a little fuller. */
+  shot(level: number, hot: boolean, pan = 0, family = "") {
     const now = performance.now();
     if (now - this.lastShot < 48) return;
     this.lastShot = now;
     const jitter = 1 + (Math.random() - 0.5) * 0.08;
+    const full = 1 + Math.min(6, Math.max(1, level)) * 0.06;
+    const push = hot ? 1.3 : 1;
+    if (family === "bubble") {
+      // a wet little pop that slides up
+      this.tone(430 * jitter, 0.05, "sine", 0.02 * full * push, 520, pan);
+      return;
+    }
+    if (family === "soap") {
+      this.tone(170 * jitter, 0.08, "sine", 0.03 * full * push, -70, pan);
+      this.tone(88, 0.06, "triangle", 0.016, -20, pan);
+      return;
+    }
+    if (family === "paste") {
+      this.tone(940 * jitter, 0.045, "sawtooth", 0.011 * full * push, 360, pan);
+      this.tone(240, 0.04, "square", 0.007, -30, pan);
+      return;
+    }
+    if (family === "zap") {
+      this.noise(0.03, 0.03 * push, 5200);
+      this.tone(1500 * jitter, 0.05, "square", 0.009 * full, -900, pan);
+      return;
+    }
+    if (family === "flush") {
+      this.noise(0.11, 0.045 * push, 620);
+      this.tone(150 * jitter, 0.1, "sine", 0.02 * full, -60, pan);
+      return;
+    }
+    if (family === "mist") {
+      this.noise(0.05, 0.022 * full * push, 3800);
+      return;
+    }
     if (level >= 6) {
       this.tone(920 * jitter, 0.045, "sawtooth", hot ? 0.016 : 0.011, 380, pan);
       this.tone(240, 0.04, "square", 0.008, -30, pan);

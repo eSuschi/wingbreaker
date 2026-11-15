@@ -14,6 +14,8 @@ export type VSpawn = {
   spin?: number;
   /** Formation row: everyone in one line wears the same look. */
   line?: number;
+  /** How the critter flies in to its place: 0 drops straight down, 1-7 are the curved fly-ins. */
+  entry?: number;
 };
 
 export type VHazard = {
@@ -150,13 +152,19 @@ export function fastKillLimit(level: number) {
   return 45 + 55 * d;
 }
 
+/**
+ * Arcade plays three stages from every chapter (two levels and the boss). After stage 30
+ * it starts over from the first chapter, a lap tougher each time, until you run out of lives.
+ */
 export function arcadeStage(stage: number) {
-  const s = Math.max(1, Math.min(30, stage));
+  const all = Math.max(1, stage);
+  const lap = Math.floor((all - 1) / 30);
+  const s = ((all - 1) % 30) + 1;
   const c = Math.ceil(s / 3);
   const slot = ((s - 1) % 3) + 1;
-  if (slot === 3) return { level: c * 10, boss: true, hpMul: 0.7 };
-  if (slot === 1) return { level: 10 * (c - 1) + 2, boss: false, hpMul: 1 };
-  return { level: 10 * (c - 1) + 7, boss: false, hpMul: 1 };
+  if (slot === 3) return { level: c * 10, boss: true, hpMul: 0.7, lap };
+  if (slot === 1) return { level: 10 * (c - 1) + 2, boss: false, hpMul: 1, lap };
+  return { level: 10 * (c - 1) + 7, boss: false, hpMul: 1, lap };
 }
 
 export function extraLifeAt(score: number, paid: number) {
@@ -193,7 +201,8 @@ function pushGrid(out: VSpawn[], at: number, n: number, kind: VKind, role: strin
     const x0 = (W - span) / 2;
     for (let c = 0; c < count; c++) {
       const x = count === 1 ? W / 2 : x0 + (span * c) / (count - 1);
-      out.push({ at: at + r * 0.35, kind, x, motion, role, oy: base + H * r * 0.074, spin: i, line: line + r });
+      // a row streams in one critter after another, not all at once
+      out.push({ at: at + r * 0.35 + c * 0.05, kind, x, motion, role, oy: base + H * r * 0.074, spin: i, line: line + r });
       i += 1;
     }
   }
@@ -217,11 +226,11 @@ export function planLevel(level: number, W: number, H: number, seed: number) {
         spin: i,
       });
     }
-    return { spawns: out, bonus: true, banner: "BONUS ROUND – NOBODY SHOOTS. PROBABLY." };
+    return { spawns: out, bonus: true, banner: "BONUS ROUND – NOBODY SHOOTS. CATCH THE SNACKS." };
   }
   const f = DENSITY[k - 1] ?? 1;
   const total = Math.max(12, Math.round((24 + 36 * d) * f));
-  const forms = ["grid", "vwing", "ring", "conga", "swoop", "rain", "pincer", "escort", "wall"];
+  const forms = ["grid", "vwing", "ring", "conga", "swoop", "rain", "pincer", "escort", "wall", "diamond", "columns", "chevrons"];
   const waves = k >= 9 ? 4 : k >= 6 ? 3 : 2;
   const out: VSpawn[] = [];
   let left = total;
@@ -230,6 +239,9 @@ export function planLevel(level: number, W: number, H: number, seed: number) {
     left -= n;
     const form = forms[Math.floor(rng() * (ch === 0 && k < 4 ? 4 : forms.length))] ?? "grid";
     const at = wave * 2.1;
+    const first = out.length;
+    // which way this wave flies in; the very first levels keep to the gentle ones
+    const entry = ch === 0 && k <= 2 ? (wave === 0 ? 0 : 7) : 1 + Math.floor(rng() * 7);
     const special = chapterRole(ch, k, wave);
     // The first wave settles lowest and later waves stack above it, so the
     // formations fill the upper half of the screen instead of one thin strip.
@@ -254,6 +266,48 @@ export function planLevel(level: number, W: number, H: number, seed: number) {
           mid[Math.floor(mid.length / 2)].role = special;
         }
       }
+    } else if (form === "diamond" || form === "columns" || form === "chevrons") {
+      // shapes built row by row: how many critters each row holds
+      const wide = Math.max(3, Math.min(7, Math.round(W / (86 * sizeMul(W)))));
+      const rows: number[] = [];
+      if (form === "diamond") {
+        const widths = wide >= 5 ? [1, 3, 5, 3, 1] : [1, 2, 3, 2, 1];
+        for (const c of widths) rows.push(c);
+      } else if (form === "columns") {
+        const cols = Math.max(2, Math.min(5, wide - 1));
+        for (let r = 0; r < Math.max(2, Math.min(5, Math.ceil(n / cols))); r++) rows.push(-cols);
+      } else {
+        for (const c of [2, 2, 2, 1, 2, 2, 1].slice(0, Math.max(3, Math.min(7, Math.ceil(n / 2))))) rows.push(c);
+      }
+      const gapX = Math.min(64 * sizeMul(W), (W * 0.8) / wide);
+      let i = 0;
+      rows.forEach((count, r) => {
+        const cnt = Math.abs(count);
+        for (let c = 0; c < cnt; c++) {
+          let x = W / 2 + (c - (cnt - 1) / 2) * gapX;
+          let oy = base + H * r * 0.07;
+          if (count < 0) x = W / 2 + (c - (cnt - 1) / 2) * gapX * 1.7; // columns stand apart
+          if (form === "chevrons") {
+            // two arrowheads flying point-down, one behind the other
+            const arm = r % 4;
+            const side = c === 0 && cnt === 2 ? -1 : 1;
+            x = W / 2 + (cnt === 1 ? 0 : side * (3 - arm) * gapX * 0.6);
+            oy = base + H * (0.03 + (r >= 4 ? 0.2 : 0) + arm * 0.05);
+          }
+          const tip = (form === "diamond" && (r === 0 || r === rows.length - 1)) || (form === "chevrons" && cnt === 1);
+          out.push({
+            at: at + i * 0.06,
+            kind: tip ? "drone" : wave === 0 ? "dart" : i % 4 === 0 ? "wedge" : "dart",
+            x,
+            motion: "rank",
+            role: i === Math.floor(rows.length) && special ? special : "",
+            oy,
+            spin: i,
+            line: wave * 2 + (form === "columns" ? c : r),
+          });
+          i += 1;
+        }
+      });
     } else if (form === "vwing") {
       const deep = Math.max(1, Math.floor((n - 1) / 2));
       const stepY = Math.min(H * 0.03, (H * 0.2) / deep);
@@ -277,7 +331,7 @@ export function planLevel(level: number, W: number, H: number, seed: number) {
       for (let i = 0; i < c; i++) {
         const a = (i / c) * Math.PI * 2;
         out.push({
-          at,
+          at: at + i * 0.07,
           kind: "drone",
           x: W / 2 + Math.cos(a) * Math.min(W * 0.28, 160),
           motion: "spiral",
@@ -344,6 +398,11 @@ export function planLevel(level: number, W: number, H: number, seed: number) {
           line: wave + (i % 3),
         });
       }
+    }
+    // everyone in a wave that holds a place in a formation flies in the same way
+    for (let i = first; i < out.length; i++) {
+      const m = out[i].motion;
+      if (m === "rank" || m === "sine" || m === "swoop" || m === "spiral" || m === "hold") out[i].entry = entry;
     }
   }
   if (ch >= 2 && k >= 6) {
@@ -419,10 +478,11 @@ export function poopShape(chapter: number, level: number, roll: number) {
 }
 
 /**
- * How long a puff of Freshener Mist lasts: at 640 px a second that is about 450 px of reach.
+ * How long a puff of Freshener Mist lasts: at 640 px a second that is about 575 px, enough
+ * to reach the top row from the bottom of the screen, so nothing is ever out of reach.
  * It thins out on the way: full strength up close, well under half at the far end.
  */
-export const MIST_LIFE = 0.7;
+export const MIST_LIFE = 0.9;
 
 /** How much of its punch a puff of mist still has with `life` seconds left. */
 export function mistPower(life: number) {
@@ -514,8 +574,8 @@ export function volley(family: GunFamily, rank: number, focus: boolean): { shots
     const cd = 0.11;
     for (let b = 0; b < puffs; b++) {
       const a = (b - (puffs - 1) / 2) * 0.14 * (focus ? 0.5 : 1);
-      // Short-lived and fading: from the back of the lane it only tickles. Fly up close
-      // and it hits half as hard again as any other gun.
+      // Fading: from the back of the lane it only tickles (well under the other guns).
+      // Fly up close and it hits half as hard again as any of them.
       add({ ox: Math.sin(a) * 10, vx: Math.sin(a) * 640, vy: -Math.cos(a) * 640, r: 7 + i * 0.6, dmg: (dps * cd * 1.5) / puffs, style: STYLE.mist, life: MIST_LIFE });
     }
     return { shots, cd };
@@ -683,7 +743,96 @@ export type BossCmd =
   | { op: "summon"; kind: VKind; x: number; role: string }
   | { op: "banner"; text: string }
   | { op: "clear" }
-  | { op: "dive" };
+  | { op: "dive" }
+  /** a column that is marked for `wait` seconds and then strikes; dx is measured from the pilot */
+  | { op: "lane"; dx: number; w: number; wait: number }
+  /** the same lying down: a strip across the screen; dy is measured from the pilot */
+  | { op: "band"; dy: number; h: number; wait: number }
+  /** a shot dropped in from the top edge at x */
+  | { op: "drop"; x: number; speed: number; shape: number };
+
+/**
+ * Every boss has one attack of its own, on top of its ordinary fire. It is always
+ * announced: a marked column or strip that strikes a moment later, or a pattern with a
+ * gap to fly through. `n` counts how many times the boss has used it so far.
+ */
+export function bossSignature(ch: number, phase: number, n: number, pilotX: number, width: number): { name: string; cmds: BossCmd[] } {
+  const cmds: BossCmd[] = [];
+  const side = n % 2 ? 1 : -1;
+  // on a narrow screen the columns and the gaps between them shrink with it
+  const fit = Math.max(0.7, Math.min(1, width / 620));
+  const lane = (dx: number, wait = 0.9, w = 70) => cmds.push({ op: "lane", dx: dx * fit, w: w * fit, wait: wait + 0.15 });
+  const band = (dy: number, wait = 1, h = 64) => cmds.push({ op: "band", dy, h, wait });
+  // a cheap repeatable shuffle, so the same fight plays the same way twice
+  const pick = (i: number) => {
+    const v = Math.sin((n + 1) * 12.9898 + i * 78.233) * 43758.5453;
+    return v - Math.floor(v);
+  };
+  if (ch === 0) {
+    lane(0);
+    if (phase >= 1) lane(side * 115, 1.15);
+    if (phase >= 2) lane(-side * 115, 1.4);
+    return { name: "FLUSH!", cmds };
+  }
+  if (ch === 1) {
+    lane(-88, 0.9, 80);
+    lane(88, 0.9, 80);
+    // the middle goes last, and late enough to step out of it once the sides have struck
+    if (phase >= 1) lane(0, 1.9, 80);
+    return { name: "DOUBLE FLUSH", cmds };
+  }
+  if (ch === 2) {
+    // a curtain of dust with one gap, a little to the side of where you are
+    const gap = Math.max(70, Math.min(width - 70, pilotX + side * 120));
+    for (let x = 22; x < width; x += 44) if (Math.abs(x - gap) > 62) cmds.push({ op: "drop", x, speed: 150 + phase * 20, shape: 6 });
+    return { name: "DUST STORM", cmds };
+  }
+  if (ch === 3) {
+    // a hand walks its fingers across the screen toward you: run the other way
+    lane(-side * 150, 0.9);
+    lane(-side * 75, 1.2);
+    lane(0, 1.5);
+    if (phase >= 2) lane(side * 75, 1.8);
+    return { name: "GRABBY HANDS", cmds };
+  }
+  if (ch === 4) {
+    const cubes = 6 + phase * 2;
+    for (let i = 0; i < cubes; i++) cmds.push({ op: "drop", x: i === 0 ? pilotX : 20 + pick(i) * (width - 40), speed: 150 + pick(i + 9) * 60, shape: 5 });
+    return { name: "ICE CUBES", cmds };
+  }
+  if (ch === 5) {
+    // three heads, three arms of slime that turn a little further every time
+    for (let head = 0; head < 3; head++) {
+      for (let j = 0; j < 4 + phase; j++) {
+        const a = n * 0.55 + (head * Math.PI * 2) / 3 + j * 0.13;
+        if (Math.sin(a) > -0.25) cmds.push({ op: "shot", a, speed: 105 + j * 22, r: 5, shape: 9 });
+      }
+    }
+    return { name: "THREE HEADS", cmds };
+  }
+  if (ch === 6) {
+    band(0);
+    if (phase >= 1) band(side * 92, 1.45);
+    return { name: "TAKE YOUR MEDICINE", cmds };
+  }
+  if (ch === 7) {
+    lane((pick(1) - 0.5) * 260, 0.9);
+    lane((pick(2) - 0.5) * 260, 1.2);
+    if (phase >= 1) lane(0, 1.5);
+    return { name: "PAN TOSS", cmds };
+  }
+  if (ch === 8) {
+    band(n % 2 ? -70 : 70, 1, 84);
+    if (phase >= 2) band(n % 2 ? 70 : -70, 1.6, 84);
+    return { name: "WET FLOOR", cmds };
+  }
+  lane(0);
+  // on a narrow screen one column is plenty: two would leave nowhere to go
+  if (phase >= 1 && width >= 500) lane(side * 120, 1.25);
+  if (phase >= 3) band(side * 60, 1.9);
+  if (phase >= 3) for (let i = 0; i < 10; i++) cmds.push({ op: "shot", a: n * 0.4 + (i / 10) * Math.PI * 2, speed: 130, r: 5, shape: 14 });
+  return { name: "ROYAL FLUSH", cmds };
+}
 
 export function bossScript(ch: number, phase: number, t: number, aim: number, width: number): BossCmd[] {
   const cmds: BossCmd[] = [];
@@ -704,7 +853,7 @@ export function bossScript(ch: number, phase: number, t: number, aim: number, wi
       cmds.push({ op: "summon", kind: "dart", x: width * 0.3, role: "" });
       ring(10, 0.28, 110, 0);
     } else {
-      cmds.push({ op: "banner", text: "HE'S JUST A COMET NOW" });
+      cmds.push({ op: "banner", text: "THE TANK IS CRACKING" });
       cmds.push({ op: "dive" });
       ring(8, 0.34, 130, 0);
     }
@@ -719,7 +868,7 @@ export function bossScript(ch: number, phase: number, t: number, aim: number, wi
   if (ch === 2) {
     ring(phase === 0 ? 5 : 8, 0.3, 100 + phase * 15, 6);
     if (phase >= 1) cmds.push({ op: "summon", kind: "wedge", x: width * 0.5, role: "hermit" });
-    if (phase >= 2) cmds.push({ op: "banner", text: "SAND" });
+    if (phase >= 2) cmds.push({ op: "banner", text: "BAG FULL" });
     return cmds;
   }
   if (ch === 3) {
@@ -729,7 +878,7 @@ export function bossScript(ch: number, phase: number, t: number, aim: number, wi
   }
   if (ch === 4) {
     ring(6, 0.35, 80, 8);
-    if (phase >= 1) cmds.push({ op: "banner", text: "INHALE" });
+    if (phase >= 1) cmds.push({ op: "banner", text: "DOOR AJAR" });
     if (phase >= 2) cmds.push({ op: "summon", kind: "drone", x: width * 0.4, role: "honey" });
     return cmds;
   }
@@ -744,7 +893,7 @@ export function bossScript(ch: number, phase: number, t: number, aim: number, wi
   }
   if (ch === 6) {
     ring(8, 0.26, 120, 10);
-    if (phase >= 1) cmds.push({ op: "banner", text: "BEHIND YOU" });
+    if (phase >= 1) cmds.push({ op: "banner", text: "SIDE EFFECTS MAY INCLUDE THIS" });
     return cmds;
   }
   if (ch === 7) {
@@ -757,12 +906,12 @@ export function bossScript(ch: number, phase: number, t: number, aim: number, wi
     cmds.push({ op: "summon", kind: "drone", x: width * 0.3, role: "spark" });
     cmds.push({ op: "summon", kind: "drone", x: width * 0.7, role: "spark" });
     ring(6, 0.32, 130, 12);
-    if (phase >= 2) cmds.push({ op: "banner", text: "GET IN THE BLUE" });
+    if (phase >= 2) cmds.push({ op: "banner", text: "CAUTION" });
     return cmds;
   }
   if (phase === 0) {
     cmds.push({ op: "shot", a: aim, speed: 150, r: 5, shape: 0 });
-    cmds.push({ op: "banner", text: "REGENT'S CHARGE" });
+    cmds.push({ op: "banner", text: "KNEEL" });
   } else if (phase === 1) {
     cmds.push({ op: "shot", a: aim, speed: 100, r: 6, shape: 9 });
     ring(8, 0.24, 120, 9);
@@ -770,7 +919,7 @@ export function bossScript(ch: number, phase: number, t: number, aim: number, wi
     ring(10, 0.22, 130, 10);
     cmds.push({ op: "shot", a: aim, speed: 160, r: 5, shape: 11 });
   } else {
-    cmds.push({ op: "banner", text: "ECLIPSE" });
+    cmds.push({ op: "banner", text: "LONG MAY HE FLUSH" });
     ring(12, 0.18, 140, 0);
   }
   return cmds;

@@ -3,7 +3,7 @@ import { CHAPTERS, chapterIndex, chapterOf, gunName, skinDef, type SkinDef } fro
 import { BOSS_LINES, HONEY_RING, MIST_LIFE, STYLE, bossPhases, familyColor } from "./v3";
 import { drawBossCreature, drawCritter, drawLoot } from "./critters";
 import { drawHostileShot, drawStar } from "./shots";
-import { DASH_WARN, LINK_REACH, REVIVE_TIME, hermitHidden, podOffsets, WORLD_H, WORLD_W, type Bullet, type Enemy, type Player, type World } from "./world";
+import { DASH_WARN, LINK_REACH, REVIVE_TIME, STRIKE_TIME, hermitHidden, podOffsets, WORLD_H, WORLD_W, type Bullet, type Enemy, type Player, type World } from "./world";
 
 /** Team colours when two fly, so nobody has to ask which ship is theirs. */
 const TEAM = ["#ff6b4a", "#35d0c0"];
@@ -287,6 +287,79 @@ function paintHangar(ctx: CanvasRenderingContext2D) {
   return true;
 }
 
+/**
+ * Each room has something drifting through it in front of the backdrop: rust flakes, soap
+ * bubbles, dust, embers, rain. Nothing here is stored; every speck is worked out from its
+ * number and the clock, so it costs almost nothing and never needs cleaning up.
+ */
+function drawWeather(ctx: CanvasRenderingContext2D, ch: number, time: number) {
+  const n = WORLD_W < 560 ? 16 : 34;
+  const rnd = (i: number, k: number) => {
+    const v = Math.sin(i * 127.1 + k * 311.7) * 43758.5453;
+    return v - Math.floor(v);
+  };
+  // per room: colour, fall speed (negative rises), sideways drift, size, shape
+  const kinds: [string, number, number, number, "flake" | "bubble" | "dot" | "spark" | "streak"][] = [
+    ["#c9713a", 26, 8, 3, "flake"],
+    ["#bfeaff", -34, 10, 6, "bubble"],
+    ["#d9c7a0", 8, 26, 2.2, "dot"],
+    ["#fff6c8", 2, 0, 1.6, "spark"],
+    ["#f2c04a", 18, 12, 2.4, "dot"],
+    ["#9be06a", -22, 14, 2.6, "dot"],
+    ["#e8e2d6", 10, 6, 1.8, "dot"],
+    ["#ff9a3c", -70, 20, 2.2, "spark"],
+    ["#bcd8ff", 520, -120, 14, "streak"],
+    ["#ffe08a", 6, 0, 1.8, "spark"],
+  ];
+  const [color, fall, drift, size, shape] = kinds[((ch % 10) + 10) % 10];
+  ctx.save();
+  for (let i = 0; i < n; i++) {
+    const depth = 0.45 + rnd(i, 1) * 0.55;
+    const span = WORLD_H + 40;
+    const y0 = rnd(i, 2) * span + time * fall * depth;
+    const y = ((y0 % span) + span) % span - 20;
+    const x0 = rnd(i, 3) * WORLD_W + Math.sin(time * 0.6 + i) * drift + (shape === "streak" ? time * drift * depth : 0);
+    const x = ((x0 % WORLD_W) + WORLD_W) % WORLD_W;
+    const s = size * depth;
+    ctx.globalAlpha = (shape === "spark" ? 0.25 + 0.5 * Math.abs(Math.sin(time * (1.5 + rnd(i, 4) * 2) + i)) : 0.3) * depth;
+    ctx.fillStyle = color;
+    if (shape === "bubble") {
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.arc(x, y, s, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.fillRect(x - s * 0.45, y - s * 0.5, s * 0.3, s * 0.3);
+    } else if (shape === "flake") {
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.rotate(time * (0.6 + rnd(i, 5)) + i);
+      ctx.fillRect(-s, -s * 0.5, s * 2, s);
+      ctx.restore();
+    } else if (shape === "streak") {
+      ctx.fillRect(x, y, 1.2, s);
+    } else if (shape === "spark") {
+      ctx.fillRect(x - s * 0.5, y - s * 0.5, s, s);
+      ctx.fillRect(x - s * 1.6, y - 0.4, s * 3.2, 0.8);
+      ctx.fillRect(x - 0.4, y - s * 1.6, 0.8, s * 3.2);
+    } else {
+      ctx.beginPath();
+      ctx.arc(x, y, s, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+  if (ch === 8) {
+    // the storm outside the public restroom: a flicker of lightning every few seconds
+    const beat = (time % 6.5) / 6.5;
+    if (beat > 0.96) {
+      ctx.globalAlpha = 0.1 * Math.abs(Math.sin(time * 60));
+      ctx.fillStyle = "#dfeaff";
+      ctx.fillRect(0, 0, WORLD_W, WORLD_H);
+    }
+  }
+  ctx.restore();
+}
+
 function drawBackdrop(ctx: CanvasRenderingContext2D, w: World) {
   const hangar = w.mode === "menu" || w.mode === "shop" || w.mode === "options" || w.mode === "standby";
   if (hangar && paintHangar(ctx)) return;
@@ -298,6 +371,7 @@ function drawBackdrop(ctx: CanvasRenderingContext2D, w: World) {
     cover(ctx, photo);
     ctx.fillStyle = "rgba(4,6,12,0.14)";
     ctx.fillRect(0, 0, WORLD_W, WORLD_H);
+    if (!w.reduce) drawWeather(ctx, idx, w.time);
     return;
   }
 
@@ -364,6 +438,27 @@ function drawHud(ctx: CanvasRenderingContext2D, w: World) {
   }
   const boss = w.enemies.find((e) => e.kind === "boss" && e.hp > 0);
   if (boss) drawBossBar(ctx, boss);
+  const toast = w.toasts[0];
+  if (toast) {
+    // an achievement: a small plaque that drops in under the top edge and leaves again
+    const show = Math.min(1, toast.life * 3, (3.2 - toast.life) * 5);
+    ctx.save();
+    ctx.globalAlpha = Math.max(0, show);
+    ctx.font = "600 15px Barlow Condensed, sans-serif";
+    const label = `ACHIEVEMENT  ${toast.text}`;
+    const tw = ctx.measureText(label).width + 28;
+    const tx = (WORLD_W - tw) / 2;
+    const ty = (boss ? 58 : 14) - (1 - show) * 12;
+    ctx.fillStyle = "rgba(10,13,18,0.9)";
+    ctx.fillRect(tx, ty, tw, 26);
+    ctx.strokeStyle = EMBER;
+    ctx.lineWidth = 1;
+    ctx.strokeRect(tx + 0.5, ty + 0.5, tw - 1, 25);
+    ctx.fillStyle = "#f4e7cf";
+    ctx.textAlign = "center";
+    ctx.fillText(label, WORLD_W / 2, ty + 18);
+    ctx.restore();
+  }
   for (let i = 0; i < w.player.lives; i++) drawLifeIcon(ctx, w.meta.skin, 54 + i * 16, 74, skin);
 
   const bw = 168;
@@ -542,7 +637,8 @@ function flame(ctx: CanvasRenderingContext2D, x: number, y: number, len: number)
 }
 
 function drawPlayer(ctx: CanvasRenderingContext2D, w: World, p: Player, focus: boolean, skin: SkinDef, spriteId: string) {
-  const blink = p.inv > 0 && Math.sin(w.time * 38) > 0;
+  // hurt and briefly safe: the ship blinks. Under a Star it glows instead.
+  const blink = p.inv > 0 && p.star <= 0 && Math.sin(w.time * 38) > 0;
   if (!blink) {
     ctx.save();
     ctx.translate(p.x, p.y + p.muzzle * 36);
@@ -637,6 +733,23 @@ function drawPlayer(ctx: CanvasRenderingContext2D, w: World, p: Player, focus: b
       ctx.translate(Math.cos(a) * 34, Math.sin(a) * 14 - 6);
       if (img) blitLong(ctx, img, 22);
       ctx.restore();
+    }
+    if (p.star > 0) {
+      const glow = ctx.createRadialGradient(0, 0, 6, 0, 0, 44);
+      glow.addColorStop(0, "rgba(255,255,255,0.0)");
+      glow.addColorStop(0.7, `rgba(255,244,200,${0.3 + 0.15 * Math.sin(w.time * 12)})`);
+      glow.addColorStop(1, "rgba(255,244,200,0)");
+      ctx.fillStyle = glow;
+      ctx.beginPath();
+      ctx.arc(0, 0, 44, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    if (p.rush > 0) {
+      ctx.fillStyle = "rgba(201,162,74,0.8)";
+      for (let i = 0; i < 3; i++) {
+        const a = w.time * 7 + i * 2.1;
+        ctx.fillRect(Math.cos(a) * 20 - 1, -30 - ((w.time * 60 + i * 9) % 14), 2, 5);
+      }
     }
     if (p.magnet > 0) {
       ctx.strokeStyle = `rgba(233,70,63,${0.25 + 0.2 * Math.sin(w.time * 6)})`;
@@ -817,7 +930,7 @@ function drawEnemy(ctx: CanvasRenderingContext2D, e: Enemy, time: number, px: nu
       ctx.save();
       ctx.translate(0, bob);
       // everyone leans into their own drift a little, divers point where they dive
-      const lean = e.motion === "dive" && e.warn <= 0 ? 0 : Math.sin(time * 2.1 + e.spin * 1.7) * 0.07;
+      const lean = (e.motion === "dive" && e.warn <= 0 ? 0 : Math.sin(time * 2.1 + e.spin * 1.7) * 0.07) + (e.lean ?? 0);
       ctx.rotate(lean);
       const hit = Math.min(1, e.flash * 6);
       const breathe = 1 + Math.sin(time * 4.3 + e.spin) * 0.025;
@@ -1266,6 +1379,9 @@ function pickupArt(kind: string, hue: number) {
   if (kind === "L") return "k/extra_life";
   if (kind === "G") return "k/magnet";
   if (kind === "Y") return "k/brush_buddy";
+  if (kind === "F") return `k/${["pizza", "fries", "chicken_drumstick"][((hue % 3) + 3) % 3]}`;
+  if (kind === "C") return "k/coffee";
+  if (kind === "T") return "k/silver_star";
   return "";
 }
 
@@ -1275,7 +1391,7 @@ function drawPickup(ctx: CanvasRenderingContext2D, kind: string, x: number, y: n
   const small = WORLD_W < 560;
   const gift = hue === 1 ? "#9ed24a" : hue === 2 ? "#e07a3d" : "#7eb6d6";
   const tone = kind === "W" ? gift : kind === "S" ? "#bfe3f5" : kind === "B" ? "#9ed24a" : kind === "D" ? "#f2d24a" : kind === "M" ? "#ff8f6b" : "#e2b84a";
-  const power = kind !== "$";
+  const power = kind !== "$" && kind !== "F";
   if (power) {
     // Power-ups glow: a soft pool of light in their colour and two orbiting
     // sparkles. Nothing hostile ever glows, so the two cannot be confused.
@@ -1297,8 +1413,9 @@ function drawPickup(ctx: CanvasRenderingContext2D, kind: string, x: number, y: n
   if (iconPath && icon) {
     ctx.translate(0, Math.sin(time * 4 + x) * 1.6);
     if (power) ctx.rotate(Math.sin(time * 2.2 + x) * 0.14);
-    else ctx.scale(0.55 + Math.abs(Math.sin(time * 3 + x)) * 0.45, 1);
-    const size = (power ? 31 : 21) * (small ? 0.88 : 1);
+    else if (kind === "$") ctx.scale(0.55 + Math.abs(Math.sin(time * 3 + x)) * 0.45, 1);
+    else ctx.rotate(Math.sin(time * 3 + x) * 0.25);
+    const size = (power ? 31 : kind === "F" ? 27 : 21) * (small ? 0.88 : 1);
     blitMass(ctx, iconPath, icon, size, 0);
     ctx.restore();
     return;
@@ -1441,6 +1558,51 @@ function drawHazard(ctx: CanvasRenderingContext2D, h: { kind: string; x: number;
     ctx.globalAlpha = h.t < 0 ? 0.5 : 0.18;
     ctx.fillStyle = "#c44536";
     ctx.fillRect(0, h.y - h.h / 2, h.w, h.h);
+  } else if (h.kind === "strike" || h.kind === "sweep") {
+    const upright = h.kind === "strike";
+    const x0 = upright ? h.x - h.w / 2 : 0;
+    const y0 = upright ? 0 : h.y - h.h / 2;
+    const ww = upright ? h.w : WORLD_W;
+    const hh = upright ? WORLD_H : h.h;
+    if (h.t > 0) {
+      // marked: it fills up as the strike gets closer, so you can see how long you have
+      const due = 1 - Math.min(1, h.t / Math.max(0.1, h.phase));
+      ctx.globalAlpha = 0.1 + due * 0.16 + Math.sin(h.t * 30) * 0.03;
+      ctx.fillStyle = "#ff5a4a";
+      ctx.fillRect(x0, y0, ww, hh);
+      ctx.globalAlpha = 0.75;
+      ctx.strokeStyle = "#ffd0c8";
+      ctx.lineWidth = 2;
+      ctx.setLineDash([10, 8]);
+      ctx.lineDashOffset = -h.t * 60;
+      ctx.beginPath();
+      if (upright) {
+        ctx.moveTo(x0, 0);
+        ctx.lineTo(x0, WORLD_H);
+        ctx.moveTo(x0 + ww, 0);
+        ctx.lineTo(x0 + ww, WORLD_H);
+      } else {
+        ctx.moveTo(0, y0);
+        ctx.lineTo(WORLD_W, y0);
+        ctx.moveTo(0, y0 + hh);
+        ctx.lineTo(WORLD_W, y0 + hh);
+      }
+      ctx.stroke();
+      ctx.setLineDash([]);
+      // the inner bar closes in on the middle of the lane
+      ctx.globalAlpha = 0.35;
+      ctx.fillStyle = "#fff0ec";
+      if (upright) ctx.fillRect(h.x - (ww * due) / 2, 0, ww * due, WORLD_H);
+      else ctx.fillRect(0, h.y - (hh * due) / 2, WORLD_W, hh * due);
+    } else {
+      const fade = Math.max(0, 1 + h.t / STRIKE_TIME);
+      ctx.globalAlpha = 0.9 * fade;
+      ctx.fillStyle = "#bfe9ff";
+      ctx.fillRect(x0, y0, ww, hh);
+      ctx.fillStyle = "#ffffff";
+      if (upright) ctx.fillRect(h.x - ww * 0.22, 0, ww * 0.44, WORLD_H);
+      else ctx.fillRect(0, h.y - hh * 0.22, WORLD_W, hh * 0.44);
+    }
   } else if (h.kind === "bolt") {
     ctx.globalAlpha = h.t < 1.2 ? 0.4 : 0.12;
     ctx.fillStyle = "#f2d24a";

@@ -13,8 +13,12 @@ It's a love letter to the shooters we grew up on, mostly _Star Defender 2_ and _
 - **Six guns**, each with six power levels and its own way of working: Bubble Blaster, Soap Cannon, Toothpaste Laser, Zap Brush, Flush Wave and Freshener Mist. More power means more of it in the air at once.
 - **Three second weapons** with limited ammo: homing plunger missiles, bath bombs and a paper roll that unrolls across a whole line.
 - **Fourteen ships** that all fly differently. A bathtub with two extra lives. A shopping cart that makes everything worth more. A toilet that brings its own brush.
+- **Enemies that fly in formation.** They loop in from the sides, settle into rows, diamonds, columns and arrowheads, and peel off to dive at you.
+- **Bosses with a move of their own.** Each one marks a column or a strip of the screen before it strikes, so you always get to see it coming.
 - **A shop** where the cash you earn turns into permanent upgrades.
-- **Arcade mode** (30 stages, no saves, bragging rights) and a **Daily** run that's the same for everyone that day.
+- **Three difficulty levels**, and **New Game+** once the Toilet King is down: the whole house again, tougher and better paid.
+- **Arcade mode** (no saves, no end, it just keeps getting worse) and a **Daily** run of 30 stages that's the same for everyone that day.
+- **Fifteen achievements** that pay cash the moment you earn them.
 - **84 kinds of enemies**, ten bosses and 24 drawings of poop. Some split. Some bounce. One has a bee.
 
 ## How to play
@@ -45,7 +49,10 @@ Shoot everything. Don't get hit. Catch the gifts.
 - **Rubber duck**: everyone stops to look at it.
 - **Magnet**: pulls every gift toward you for a while.
 - **Brush Buddy**: a little toilet brush that circles your ship and shoots along.
+- **Coffee**: you fire faster for a while.
+- **Silver star**: nothing can touch you for a few seconds.
 - **Winged toilet seat**: an extra life. Rare.
+- **Pizza, fries, a drumstick**: bonus rounds only. They are worth cash.
 - **Coin**: money for the shop.
 
 Every kill also charges your next bomb a little. The thin bar next to your bombs shows how close you are.
@@ -90,7 +97,7 @@ Built with React, TanStack Start, Vite and a plain 2D canvas. Progress is saved 
 
 ## Status
 
-Still being worked on. Next up: enemies that fly in and hold formation, nastier boss attacks, moving backgrounds, difficulty levels, proper music, and an online leaderboard for the Daily run.
+Still being worked on. Next up: proper music and an online leaderboard for the Daily run.
 
 The pictures live in `public/art` and were drawn with ChatGPT to our brief; the backgrounds come from the first version of the game, built with Grok.
 
