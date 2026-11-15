@@ -48,6 +48,12 @@ export type Campaign = {
   feats: string[];
   /** lifetime counters the achievements are measured against */
   tally: Record<string, number>;
+  /** the Poop-Dex: how many of each critter have been shot down, by sprite name */
+  dex: Record<string, number>;
+  /** perks picked on this run, one entry per pick; emptied when all lives are lost */
+  perks: string[];
+  /** the three perks on offer after a mini-boss or a boss, until one is picked */
+  perkOffer: string[] | null;
   autoFire: boolean | null;
   crew: "solo" | "coop";
   music: number;
@@ -308,6 +314,9 @@ export function freshCampaign(): Campaign {
     loop: 0,
     feats: [],
     tally: {},
+    dex: {},
+    perks: [],
+    perkOffer: null,
     autoFire: null,
     crew: "solo",
     music: 55,
@@ -423,6 +432,15 @@ function sanitize(raw: Partial<Campaign> | null | undefined, legacyBest: number)
       }
       return out;
     })(),
+    dex: (() => {
+      const out: Record<string, number> = {};
+      if (raw.dex && typeof raw.dex === "object") {
+        for (const [k, v] of Object.entries(raw.dex).slice(0, 200)) if (typeof v === "number" && Number.isFinite(v) && /^[a-z_]{2,40}$/.test(k)) out[k] = Math.max(0, Math.min(9_999_999, Math.floor(v)));
+      }
+      return out;
+    })(),
+    perks: Array.isArray(raw.perks) ? raw.perks.filter((x): x is string => typeof x === "string" && /^[a-z_]{2,24}$/.test(x)).slice(0, 40) : [],
+    perkOffer: Array.isArray(raw.perkOffer) && raw.perkOffer.length > 0 ? raw.perkOffer.filter((x): x is string => typeof x === "string" && /^[a-z_]{2,24}$/.test(x)).slice(0, 3) : null,
     autoFire: typeof raw.autoFire === "boolean" ? raw.autoFire : null,
     crew: raw.crew === "coop" ? "coop" : "solo",
     music: clampInt(raw.music, 0, 100, 55),

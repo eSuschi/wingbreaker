@@ -4,7 +4,10 @@ import { Sfx } from "./audio";
 import { Music } from "./music";
 import { chapterOf, CHAPTERS, DIFFICULTY, FEATS, quipFor, starTotal, type SkinId, type UpgradeId } from "./meta";
 import { Shop } from "./Shop";
-import { CREDITS, GUIDE, LOSER_TITLES, TIPS, WINNER_TITLES, daySeed, type GunFamily } from "./v3";
+import { Dex } from "./Dex";
+import { PerkPick, PerkRow } from "./PerkPick";
+import { dexTotals } from "./album";
+import { CREDITS, LOSER_TITLES, TIPS, WINNER_TITLES, daySeed, type GunFamily } from "./v3";
 
 import { ACTIONS, codeLabel, DEFAULT_BINDS, loadBinds, saveBinds, type Action, type Binds } from "./controls";
 import { drawWorld } from "./render";
@@ -38,6 +41,9 @@ import {
   setCrew,
   purchaseGun,
   purchasePower,
+  pickPerk,
+  rerollPerks,
+  rerollCost,
   gunRank,
   step,
   fitWorld,
@@ -106,6 +112,15 @@ type Ui = {
   replay: boolean;
   series: [number, number];
   duel: { wins: [number, number]; taunt: string } | null;
+  /** the two pilots' record against each other, kept for good: duels won, levels out-shot, partners picked up */
+  rivalry: { duels: [number, number]; levels: [number, number]; rescues: [number, number] };
+  /** the Poop-Dex: critters shot down by sprite, and every lifetime counter (bosses beaten are among them) */
+  dex: Record<string, number>;
+  counts: Record<string, number>;
+  /** perks held on this run, the three on offer if any, and what rolling them again costs */
+  perks: string[];
+  perkOffer: string[] | null;
+  rerollCost: number;
 };
 
 function readUi(world: World, muted: boolean): Ui {
@@ -162,6 +177,16 @@ function readUi(world: World, muted: boolean): Ui {
     replay: world.pinned != null && !world.arcade,
     series: [world.series[0], world.series[1]],
     duel: world.duel ? { wins: [world.duel.wins[0], world.duel.wins[1]], taunt: world.duel.taunt } : null,
+    dex: { ...world.meta.dex },
+    counts: { ...world.meta.tally },
+    perks: world.arcade || world.duel ? [] : world.meta.perks.slice(),
+    perkOffer: world.arcade || world.duel ? null : world.meta.perkOffer ? world.meta.perkOffer.slice() : null,
+    rerollCost: rerollCost(world),
+    rivalry: {
+      duels: [world.meta.tally.duelWin1 ?? 0, world.meta.tally.duelWin2 ?? 0],
+      levels: [world.meta.tally.lvlWin1 ?? 0, world.meta.tally.lvlWin2 ?? 0],
+      rescues: [world.meta.tally.rescue1 ?? 0, world.meta.tally.rescue2 ?? 0],
+    },
   };
 }
 
@@ -265,6 +290,12 @@ export function Wingbreaker() {
     replay: false,
     series: [0, 0],
     duel: null,
+    rivalry: { duels: [0, 0], levels: [0, 0], rescues: [0, 0] },
+    dex: {},
+    counts: {},
+    perks: [],
+    perkOffer: null,
+    rerollCost: 100,
   });
   const [touch, setTouch] = useState(false);
   // which pilot the hangar is choosing a ship for
@@ -274,7 +305,8 @@ export function Wingbreaker() {
   const [pick, setPick] = useState(false);
   const [binds, setBinds] = useState<Binds>(() => loadBinds());
   const [capture, setCapture] = useState<Action | null>(null);
-  const [guideId, setGuideId] = useState("dart");
+  /** where the Poop-Dex was opened from, so BACK goes back there */
+  const [dexFrom, setDexFrom] = useState<"menu" | "options">("menu");
   const [initials, setInitials] = useState("AAA");
   const [tip, setTip] = useState(TIPS[0]);
   const touchFireRef = useRef(false);
@@ -520,6 +552,14 @@ export function Wingbreaker() {
     };
 
     const onKeyDown = (e: KeyboardEvent) => {
+      if (world.meta.perkOffer && !world.arcade && !world.duel && (world.mode === "clear" || world.mode === "menu")) {
+        // a perk is waiting: 1, 2 or 3 picks it, and nothing behind the card reacts to the keyboard
+        const i = ["Digit1", "Digit2", "Digit3", "Numpad1", "Numpad2", "Numpad3"].indexOf(e.code) % 3;
+        const id = i >= 0 ? world.meta.perkOffer[i] : undefined;
+        if (id && pickPerk(world, id)) sync();
+        if (e.code !== "F8" && e.code !== "F5" && e.code !== "F12") e.preventDefault();
+        return;
+      }
       if (captureRef.current) {
         e.preventDefault();
         if (e.code !== "Escape") {
@@ -942,8 +982,12 @@ export function Wingbreaker() {
                 >
                   <span className="font-display text-lg tracking-[0.14em] text-ink">DUEL</span>
                   <span className="text-right text-xs leading-tight text-muted">
-                    <span className="block">Pilot against pilot, first to 3 rounds</span>
-                    <span className="block">Bottom: WASD + Z · Top: arrows + K</span>
+                    <span className="block">Pilot against pilot, first to 3 rounds. Loser is the Poop Cleaner.</span>
+                    <span className="block">
+                      {ui.rivalry.duels[0] + ui.rivalry.duels[1] > 0
+                        ? `All time: P1 ${ui.rivalry.duels[0]} : ${ui.rivalry.duels[1]} P2`
+                        : "Bottom: WASD + Z · Top: arrows + K"}
+                    </span>
                   </span>
                 </button>
               </div>
@@ -958,8 +1002,19 @@ export function Wingbreaker() {
                   ["SHOP", `$${money} to spend`, () => act((w) => openMode(w, "shop"))],
                   ["RANKS", "Top ten and achievements", () => act((w) => openMode(w, "ranks"))],
                   [
+                    "POOP-DEX",
+                    (() => {
+                      const t = dexTotals({ dex: ui.dex, tally: ui.counts, seen: ui.seen });
+                      return `${t.have} of ${t.all} logged`;
+                    })(),
+                    () => {
+                      setDexFrom("menu");
+                      act((w) => openMode(w, "guide"));
+                    },
+                  ],
+                  [
                     "OPTIONS",
-                    "Sound, keys, field guide",
+                    "Sound, keys, difficulty",
                     () => {
                       setArmReset(false);
                       setCapture(null);
@@ -1027,6 +1082,17 @@ export function Wingbreaker() {
             </button>
           </div>
         </div>
+      )}
+
+      {ui.perkOffer && (ui.mode === "clear" || ui.mode === "menu") && (
+        <PerkPick
+          offer={ui.perkOffer}
+          owned={ui.perks}
+          dollars={ui.dollars}
+          rerollCost={ui.rerollCost}
+          onPick={(id) => act((w) => pickPerk(w, id))}
+          onReroll={() => act((w) => rerollPerks(w))}
+        />
       )}
 
       {ui.mode === "shop" && (
@@ -1111,8 +1177,15 @@ export function Wingbreaker() {
                 onChange={(e) => act((w) => setSfx(w, Number(e.target.value)))}
               />
             </label>
-            <button type="button" className={row} onClick={() => act((w) => openMode(w, "guide"))}>
-              <span>FIELD GUIDE</span>
+            <button
+              type="button"
+              className={row}
+              onClick={() => {
+                setDexFrom("options");
+                act((w) => openMode(w, "guide"));
+              }}
+            >
+              <span>POOP-DEX</span>
             </button>
             <p className="mt-3 font-display text-sm tracking-[0.22em] text-muted">CONTROLS</p>
             <p className="text-xs text-muted">Click a row, then press the new key. Escape cancels.</p>
@@ -1172,6 +1245,7 @@ export function Wingbreaker() {
             <p className="text-center font-display text-2xl text-muted">
               {ui.duel ? `DUEL · ${ui.duel.wins[0]} : ${ui.duel.wins[1]}` : String(ui.score).padStart(6, "0")}
             </p>
+            <PerkRow owned={ui.perks} className="mb-1" />
             <button type="button" className={row} onClick={() => act((w) => openMode(w, "play"))}>
               <span>RESUME</span>
             </button>
@@ -1261,6 +1335,9 @@ export function Wingbreaker() {
                     <p className="mt-2 text-center font-display text-xs tracking-[0.2em] text-muted">
                       LEVELS WON · {ui.series[0]} : {ui.series[1]}
                     </p>
+                    <p className="mt-1 text-center text-[11px] leading-snug text-muted">
+                      All time: levels {ui.rivalry.levels[0]} : {ui.rivalry.levels[1]} · duels {ui.rivalry.duels[0]} : {ui.rivalry.duels[1]} · rescues {ui.rivalry.rescues[0]} : {ui.rivalry.rescues[1]}
+                    </p>
                   </div>
                 );
               })()}
@@ -1308,6 +1385,17 @@ export function Wingbreaker() {
             <p className="font-display text-4xl leading-none">
               {ui.duel.wins[0]} : {ui.duel.wins[1]}
             </p>
+            {/* the poster: who cleans up, in letters nobody can miss */}
+            <div className="-mx-5 my-1 border-y-2 border-[#d9a441] bg-[#2a1c0c] px-3 py-3">
+              <p className="font-display text-sm tracking-[0.3em]" style={{ color: ui.duel.wins[0] > ui.duel.wins[1] ? "#35d0c0" : "#ff6b4a" }}>
+                PILOT {ui.duel.wins[0] > ui.duel.wins[1] ? 2 : 1} IS NOW THE
+              </p>
+              <p className="font-display text-[clamp(44px,15vw,64px)] leading-[0.9] font-bold tracking-wide text-[#d9a441]">POOP CLEANER</p>
+              <p className="mt-1 text-xs text-[#c9b48a]">The mop stays on until somebody wins it off them.</p>
+            </div>
+            <p className="font-display text-xs tracking-[0.2em] text-muted">
+              ALL TIME · <span style={{ color: "#ff6b4a" }}>P1 {ui.rivalry.duels[0]}</span> : <span style={{ color: "#35d0c0" }}>{ui.rivalry.duels[1]} P2</span>
+            </p>
             <p className="text-sm italic text-cold">{ui.duel.taunt}</p>
             <button
               type="button"
@@ -1334,7 +1422,7 @@ export function Wingbreaker() {
               {ui.record ? "NEW BEST" : `BEST ${String(ui.best).padStart(6, "0")}`}
             </p>
             <p className="text-sm italic text-cold">{ui.deathLine}</p>
-            <p className="text-xs text-muted">Cash stays. Guns and lives return to the hangar kit.</p>
+            <p className="text-xs text-muted">Cash, power and guns stay. The run's perks are gone.</p>
             <button type="button" className={row} onClick={() => act((w) => retryLevel(w))}>
               <span>AGAIN</span>
             </button>
@@ -1419,41 +1507,7 @@ export function Wingbreaker() {
       )}
 
       {ui.mode === "guide" && (
-        <div className="absolute inset-0 z-20 overflow-y-auto bg-bg/85">
-          <div className="mx-auto flex w-[min(94vw,560px)] flex-col gap-2 px-5 py-16">
-            <h2 className="font-display text-4xl tracking-wide">FIELD GUIDE</h2>
-            <div className="grid grid-cols-2 gap-1">
-              {GUIDE.map((entry) => {
-                const known = ui.seen.includes(entry.id);
-                return (
-                  <button
-                    key={entry.id}
-                    type="button"
-                    className={`${row} h-10 text-sm ${guideId === entry.id ? "border-ember" : ""} ${known ? "" : "opacity-40"}`}
-                    onClick={() => known && setGuideId(entry.id)}
-                  >
-                    <span className="flex min-w-0 items-center gap-2">
-                      <img src={`/art/${entry.art}.webp`} alt="" className={`h-7 w-7 shrink-0 object-contain ${known ? "" : "brightness-0 opacity-60"}`} />
-                      <span className="truncate">{known ? entry.name : "???"}</span>
-                    </span>
-                  </button>
-                );
-              })}
-            </div>
-            {(() => {
-              const pick = GUIDE.find((g) => g.id === guideId && ui.seen.includes(g.id));
-              return (
-                <div className="flex min-h-[88px] items-center gap-4 border border-line bg-bg/70 px-4 py-3">
-                  {pick && <img src={`/art/${pick.art}.webp`} alt="" className="h-16 w-16 shrink-0 object-contain" />}
-                  <p className="text-sm italic text-cold">{pick?.line ?? "Not logged yet. Go and get shot at by it."}</p>
-                </div>
-              );
-            })()}
-            <button type="button" className={row} onClick={() => act((w) => { w.mode = "options"; })}>
-              <span>BACK</span>
-            </button>
-          </div>
-        </div>
+        <Dex dex={ui.dex} tally={ui.counts} seen={ui.seen} room={Math.floor((ui.level - 1) / 10)} onBack={() => act((w) => { w.mode = dexFrom; })} />
       )}
 
       {ui.mode === "ranks" && (

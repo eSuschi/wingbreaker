@@ -1,4 +1,6 @@
-import { lookFor, lookName } from "./army";
+import { lookFor, lookId, lookName } from "./army";
+import { perkCount, perkDef, rerollPrice, rollPerks } from "./perks";
+import { DEX_ALL_CASH, DEX_ROOMS, DEX_ROOM_CASH, dexName, dexRoomDone, dexRoomOf } from "./album";
 import {
   LEVELS,
   buySkin,
@@ -209,6 +211,11 @@ export type Enemy = {
   push?: number;
   /** Squeaky Duck: seconds it still moves and shoots at half speed */
   slow?: number;
+  /** boss: the weak point showing right now, where it sits on the boss and how much it still takes */
+  weak?: { dx: number; dy: number; r: number; hp: number; max: number; name: string; age: number } | null;
+  /** boss: weak points still to come, and the seconds until the next one shows */
+  weakLeft?: number;
+  weakWait?: number;
   /** Hair Dryer: the last breath that touched it, and how many of its puffs did */
   airId?: number;
   airN?: number;
@@ -267,6 +274,8 @@ export type Player = {
   splat: number;
   slow: number;
   insured: boolean;
+  /** perk Second Wind: still to be used on this level */
+  wind?: boolean;
   /** two pilots only: shot down and waiting for the partner to fly over */
   down?: boolean;
   /** seconds the partner has spent reviving this pilot */
@@ -343,6 +352,10 @@ export type World = {
   stars: { x: number; y: number; z: number; s: number }[];
   rng: () => number;
   pinned: number | null;
+  /** which pilot lost the last duel of this sitting, and wears the mop until the page is closed: 0, 1 or null */
+  cleaner: number | null;
+  /** times the perk offer on the table has been rolled again */
+  perkRolls: number;
   /** the shop's firing range: a throwaway world that shows a gun at work. Never saved, never cleared, nothing shoots back. */
   range?: boolean;
   rangeT?: number;
@@ -595,6 +608,8 @@ export function createWorld(best = 0): World {
     stars,
     rng,
     pinned: null,
+    cleaner: null,
+    perkRolls: 0,
     starShow: "",
     daily: false,
     tally: [0, 0],
@@ -727,7 +742,52 @@ export function closeOverlay(w: World) {
  * fast, what it pays, and how long a boss's marked strike waits. Set by the difficulty,
  * the New Game+ loop, or the arcade lap.
  */
+/** How many times a perk is held, for the rules of the level being flown. Perks are the campaign's: not the arcade, a duel or the firing range. */
+function perk(w: World, id: string) {
+  if (w.arcade || w.duel || w.range) return 0;
+  return perkCount(w.meta.perks, id);
+}
+
+/** After a mini-boss or a boss: three perks on the table, kept in the save until one is picked. */
+function offerPerks(w: World) {
+  const offer = rollPerks(w.meta.perks, w.coop, w.rng);
+  w.meta.perkOffer = offer.length ? offer : null;
+  w.perkRolls = 0;
+}
+
+export function pickPerk(w: World, id: string) {
+  if (!w.meta.perkOffer || !w.meta.perkOffer.includes(id) || !perkDef(id)) return false;
+  w.meta.perks.push(id);
+  w.meta.perkOffer = null;
+  w.perkRolls = 0;
+  w.cues.push("clean");
+  persist(w, w.snap);
+  return true;
+}
+
+/** Pays to see three other perks. */
+/** What seeing three other perks costs right now. */
+export function rerollCost(w: World) {
+  return rerollPrice(w.perkRolls);
+}
+
+export function rerollPerks(w: World) {
+  const price = rerollPrice(w.perkRolls);
+  if (!w.meta.perkOffer || w.meta.dollars < price) return false;
+  const next = rollPerks(w.meta.perks, w.coop || w.meta.crew === "coop", Math.random, w.meta.perkOffer);
+  if (!next.length) return false;
+  w.meta.dollars -= price;
+  w.meta.perkOffer = next;
+  w.perkRolls += 1;
+  w.cues.push("pickup");
+  persist(w, w.snap);
+  return true;
+}
+
 export function tuning(w: World) {
+  // perks that change what things pay and how fast enemy shots fly
+  const pay = (1 + 0.2 * perk(w, "deep_pockets")) * (perk(w, "loan_shark") ? 1.5 : 1);
+  const rush = perk(w, "sugar_rush") ? 1.12 : 1;
   if (w.arcade) {
     const lap = arcadeStage(w.arcadeStage).lap;
     return { hp: 1 + lap * 0.6, heat: 1 + lap * 0.2, speed: 1 + lap * 0.05, pay: 1, warn: 1 };
@@ -737,8 +797,8 @@ export function tuning(w: World) {
   return {
     hp: [1, 1, 1.2][d] * (1 + loop * 0.6),
     heat: [0.65, 1, 1.35][d] * (1 + loop * 0.15),
-    speed: [0.88, 1, 1.12][d] * (1 + Math.min(3, loop) * 0.04),
-    pay: [0.8, 1, 1.25][d] * (1 + loop * 0.5),
+    speed: [0.88, 1, 1.12][d] * (1 + Math.min(3, loop) * 0.04) * rush,
+    pay: [0.8, 1, 1.25][d] * (1 + loop * 0.5) * pay,
     warn: [1.4, 1, 0.85][d],
   };
 }
@@ -762,6 +822,8 @@ export function newLoop(w: World) {
 export function newMission(w: World) {
   w.meta.level = 1;
   w.meta.loop = 0;
+  w.meta.perks = [];
+  w.meta.perkOffer = null;
   w.meta.cleared = false;
   w.level = 1;
   w.score = 0;
@@ -911,6 +973,32 @@ function note(w: World, key: string, n = 1, max = false) {
   }
 }
 
+/** Pays for a room of the Poop-Dex the moment its last page is filled, and for the whole album after the tenth. */
+function dexCheck(w: World, ch: number) {
+  if (ch < 0 || w.meta.tally[`dexRoom${ch}`] || !dexRoomDone(w.meta, ch)) return;
+  w.meta.tally[`dexRoom${ch}`] = 1;
+  w.meta.dollars += DEX_ROOM_CASH;
+  w.toasts.push({ text: `POOP-DEX: ${DEX_ROOMS[ch].title.toUpperCase()} COMPLETE  +$${DEX_ROOM_CASH}`, life: 3.6 });
+  w.cues.push("clean");
+  if (!w.meta.tally.dexAll && DEX_ROOMS.every((_, i) => w.meta.tally[`dexRoom${i}`])) {
+    w.meta.tally.dexAll = 1;
+    w.meta.dollars += DEX_ALL_CASH;
+    w.toasts.push({ text: `POOP-DEX COMPLETE  +$${DEX_ALL_CASH}`, life: 4.5 });
+  }
+}
+
+/** A critter shot down goes into the Poop-Dex: counted every time, announced the first. */
+function dexLog(w: World, e: Enemy) {
+  if (w.range) return;
+  const id = lookId(e.look);
+  const had = w.meta.dex[id] ?? 0;
+  w.meta.dex[id] = had + 1;
+  if (had > 0) return;
+  // a new page: say so, unless the corner is already busy saying other things
+  if (w.toasts.length < 2) w.toasts.push({ text: `POOP-DEX: ${dexName(id).toUpperCase()}`, life: 1.8 });
+  dexCheck(w, dexRoomOf(id));
+}
+
 /** The ship a pilot is flying: the wingman has a hangar slot of their own. */
 export function shipOf(w: World, p: Player) {
   const def = skinDef(p === w.wing ? w.meta.skin2 : w.meta.skin);
@@ -957,6 +1045,11 @@ function parkPlayer(w: World, snap: RunSnap | null) {
   p.splat = 0;
   p.slow = 0;
   p.insured = !w.arcade && w.meta.upgrades.insurance > 0;
+  // perks picked on this run
+  if (perk(w, "glass_cannon")) p.lives = Math.max(1, p.lives - 1);
+  p.bombs = Math.min(5, p.bombs + perk(w, "bomb_bag"));
+  if (perk(w, "spare_roll")) p.shield = true;
+  p.wind = perk(w, "second_wind") > 0;
   note(w, `gun_${p.family}`);
   p.down = false;
   p.revive = 0;
@@ -979,7 +1072,8 @@ function parkPlayer(w: World, snap: RunSnap | null) {
     wing.bombs = p.bombs;
     // each pilot's lives follow their own ship
     wing.lives = Math.max(1, p.lives - ship.lives + ship2.lives);
-    wing.shield = !!ship2.shield;
+    wing.shield = !!ship2.shield || perk(w, "spare_roll") > 0;
+    wing.wind = perk(w, "second_wind") > 0;
     wing.inv = 1.35;
     wing.fireCd = 0.2;
     wing.missiles = p.missiles;
@@ -1260,6 +1354,8 @@ export function startOrResume(w: World) {
 }
 
 export function nextLevel(w: World) {
+  // a perk is waiting to be picked: that comes first
+  if (!w.arcade && w.meta.perkOffer) return;
   if (w.arcade) {
     // the Daily run stops at stage 30; plain Arcade keeps lapping until you are out of lives
     w.arcadeStage = w.daily ? Math.min(30, w.arcadeStage + 1) : w.arcadeStage + 1;
@@ -1651,11 +1747,28 @@ function killEnemy(w: World, e: Enemy) {
     if (w.rng() < 0.25) float(w, e.x, e.y - 40, LAST_WORDS[Math.floor(w.rng() * LAST_WORDS.length)] ?? "WORTH IT");
   }
   if (e.role !== "chip" && e.role !== "spore" && e.role !== "rain" && !poop) note(w, "kills");
+  if (!poop && e.kind !== "boss") dexLog(w, e);
+  const zone = perk(w, "splash_zone");
+  if (zone > 0 && !big && e.role !== "mini" && e.role !== "chip" && e.role !== "spore" && e.role !== "rain" && !poop) {
+    // perk Splash Zone: small fry burst and hurt whatever is next to them
+    const reach = 58 + e.r;
+    let wet = false;
+    for (const o of w.enemies) {
+      if (o === e || o.hp <= 0 || hermitHidden(o)) continue;
+      if (Math.hypot(o.x - e.x, o.y - e.y) > reach + o.r * 0.4) continue;
+      o.hp -= Math.max(1, e.max * 0.45 * zone) * (o.kind === "boss" || o.role === "mini" ? 0.5 : 1);
+      o.by = e.by;
+      o.flash = Math.max(o.flash, 0.1);
+      wet = true;
+    }
+    if (wet) ring(w, e.x, e.y, "#9fd8ff", 0.2, reach * 0.5, 1.6);
+  }
   if (e.kind === "boss") {
     // whatever it had marked dies with it
     w.hazards = w.hazards.filter((h) => h.kind !== "strike" && h.kind !== "sweep");
     if (!w.arcade) {
       note(w, `boss${e.ch}`);
+      dexCheck(w, e.ch);
       if (w.bombsUsed === 0) note(w, "bossNoBomb");
       if (e.ch === 9 && (w.meta.loop ?? 0) > 0) note(w, "loopKing");
     }
@@ -1704,7 +1817,7 @@ function killEnemy(w: World, e: Enemy) {
     const base = e.kind === "cruiser" ? 0.28 : e.kind === "wedge" ? 0.16 : e.kind === "drone" ? 0.13 : 0.11;
     // late formations are three times the size, so each enemy drops less often
     const thin = (1 - 0.5 * Math.min(1, (w.level - 1) / 99)) * (poop ? 0.35 : 1);
-    const chance = Math.min(0.48, base * thin * luckMul(w.arcade ? 0 : w.meta.upgrades.luck));
+    const chance = Math.min(0.55, base * thin * luckMul(w.arcade ? 0 : w.meta.upgrades.luck) * (1 + 0.3 * perk(w, "lucky_seat")));
     // never more than a few gifts in the air: the screen belongs to the poop
     if (w.rng() < chance && w.pickups.length < 3) {
       const roll = w.rng();
@@ -1811,11 +1924,15 @@ function takePickup(w: World, kind: PickupKind, value: number, who: Player = w.p
         w.cues.push("drive");
         float(w, p.x, p.y - 28, "AFTERBURNER", true);
       }
-      p.boostT = BOOST_TIME;
+      p.boostT = BOOST_TIME + 10 * perk(w, "long_ribbon");
     }
     cheer(w, p.x, p.y, familyColor(p.family));
   } else if (kind === "S") {
     p.shield = true;
+    if (perk(w, "shared_bubble") && w.wing) {
+      w.player.shield = true;
+      w.wing.shield = true;
+    }
     w.cues.push("pickup");
     float(w, p.x, p.y - 28, "SHIELD BUBBLE");
     cheer(w, p.x, p.y, "#7eb6d6");
@@ -1894,7 +2011,7 @@ function dropPickup(w: World, kind: PickupKind, x: number, y: number, value = 0)
 
 function stepPickups(w: World, dt: number) {
   const crew = living(w);
-  const baseMagnet = 1 + (w.meta.upgrades.magnet || 0);
+  const baseMagnet = 1 + (w.meta.upgrades.magnet || 0) + 2 * perk(w, "sticky_fingers");
   const vacuum = w.clearing && crew.length > 0;
   const next: Pickup[] = [];
   for (const pk of w.pickups) {
@@ -1967,7 +2084,24 @@ function hurtPlayer(w: World, p: Player = w.player) {
     w.cues.push("shield");
     return;
   }
+  if (p.wind && p.lives <= 1) {
+    // perk Second Wind: once a level, the last life holds
+    p.wind = false;
+    p.inv = 1.6;
+    burst(w, p.x, p.y, "#ffd0d0", 14, 170, false);
+    ring(w, p.x, p.y, "#ff8f8f", 0.32, 10, 2);
+    addTrauma(w, 0.4);
+    float(w, p.x, p.y - 30, "SECOND WIND", true);
+    w.bullets = w.bullets.filter((b) => b.friendly);
+    w.cues.push("shield");
+    return;
+  }
   p.lives -= 1;
+  if (perk(w, "loan_shark") && w.meta.dollars > 0) {
+    const fee = Math.min(50, w.meta.dollars);
+    w.meta.dollars -= fee;
+    float(w, p.x, p.y - 62, `LOAN SHARK -$${fee}`);
+  }
   p.inv = 1.85;
   w.chain = 0;
   w.perfect = false;
@@ -2021,6 +2155,9 @@ function hurtPlayer(w: World, p: Player = w.player) {
       persist(w, w.snap);
       w.pinned = frontier;
     } else {
+      // all lives lost: the run's perks go with them
+      w.meta.perks = [];
+      w.meta.perkOffer = null;
       w.mode = "over";
       w.clearing = false;
       w.record = w.score > w.best;
@@ -2040,7 +2177,8 @@ function firePlayer(w: World, p: Player, focus: boolean) {
   const size = rank <= 2 ? 0 : rank <= 4 ? 1 : 2;
   const pack = volley(family, rank, focus);
   const ship = shipOf(w, p);
-  const kick = (feed ? 1.18 : 1) * (w.link ? 1.25 : 1) * ship.dmg;
+  const hot = (1 + 0.08 * perk(w, "hot_sauce")) * (perk(w, "glass_cannon") ? 1.25 : 1);
+  const kick = (feed ? 1.18 : 1) * (w.link ? (perk(w, "buddy_bond") ? 1.4 : 1.25) : 1) * ship.dmg * hot;
   const owner = p === w.wing ? 1 : 0;
   // in a duel the top pilot faces down
   const up = w.duel && p === w.wing ? -1 : 1;
@@ -2127,7 +2265,8 @@ function firePlayer(w: World, p: Player, focus: boolean) {
   }
   p.muzzle = 0.05;
   const trig = 1 - (w.arcade ? 0 : w.meta.upgrades.trigger * 0.1);
-  p.fireCd = Math.max(0.05, pack.cd * trig * ship.rate * (feed ? 0.7 : 1) * (p.rush > 0 ? 0.68 : 1));
+  const quick = (1 / (1 + 0.06 * perk(w, "espresso"))) * (perk(w, "sugar_rush") ? 1 / 1.18 : 1);
+  p.fireCd = Math.max(0.045, pack.cd * trig * ship.rate * (feed ? 0.7 : 1) * (p.rush > 0 ? 0.68 : 1) * quick);
 }
 
 /** The second weapon: whatever the last ammo crate was, one shot per press while ammo lasts. */
@@ -2160,6 +2299,84 @@ function puff(w: World, x: number, y: number, style: number, size: number, life 
   if (w.reduce && life < 0.2) return;
   if (w.puffs.length > 36) w.puffs.shift();
   w.puffs.push({ x, y, life, max: life, style, size });
+}
+
+const WEAK_NAMES = ["VALVE", "LID", "HANDLE", "PLUG"];
+/** Where a boss's weak points sit, in boss radii from its middle: low on the rim, where shots from below reach first. */
+const WEAK_SPOTS: [number, number][] = [
+  [-0.72, 0.52],
+  [0.72, 0.52],
+  [0, 0.9],
+  [-0.4, 0.8],
+];
+
+/** A boss shows its weak points one at a time: three in a fight, four on the Toilet King. */
+function stepWeak(w: World, e: Enemy, dt: number) {
+  if (w.intro || w.range) return;
+  if (e.weakLeft === undefined) {
+    e.weakLeft = w.level >= LEVELS ? 4 : 3;
+    e.weakWait = 6;
+  }
+  if (e.weak) {
+    e.weak.age += dt;
+    return;
+  }
+  if ((e.weakLeft ?? 0) <= 0) return;
+  e.weakWait = (e.weakWait ?? 0) - dt;
+  if ((e.weakWait ?? 0) > 0) return;
+  const total = w.level >= LEVELS ? 4 : 3;
+  const i = total - (e.weakLeft ?? 0);
+  const spot = WEAK_SPOTS[i % WEAK_SPOTS.length];
+  const hp = Math.max(10, e.max * 0.04);
+  e.weak = { dx: spot[0] * e.r, dy: spot[1] * e.r, r: Math.max(16, e.r * 0.31), hp, max: hp, name: WEAK_NAMES[i % WEAK_NAMES.length], age: 0 };
+  w.cues.push("ready");
+}
+
+/** A shot on the weak point hurts the boss like any other, and wears the weak point down as well. */
+function hitWeak(w: World, e: Enemy, b: Bullet) {
+  const weak = e.weak;
+  if (!weak) return;
+  const dmg = b.style === STYLE.mist ? b.dmg * mistPower(b.life) : b.dmg;
+  e.hp -= dmg;
+  e.by = b.owner ?? 0;
+  addTeam(w, e.by, dmg * 0.05);
+  weak.hp -= dmg;
+  e.flash = Math.max(e.flash, 0.06);
+  ring(w, e.x + weak.dx, e.y + weak.dy, "#ffe14a", 0.14, 5, 1.4);
+  const left = b.pierce ?? 0;
+  if (left > 0) {
+    b.pierce = left - 1;
+    (b.hit ??= []).push(e);
+  } else b.life = 0;
+  w.cues.push("hit");
+  if (weak.hp > 0) return;
+  // blown: the boss takes a lump of extra damage, chokes for a few seconds, and everything it had in the air fizzles
+  const x = e.x + weak.dx;
+  const y = e.y + weak.dy;
+  e.weak = null;
+  e.weakLeft = (e.weakLeft ?? 1) - 1;
+  e.weakWait = 7;
+  e.hp -= e.max * 0.07;
+  e.fire = Math.max(e.fire, 2.8);
+  e.flash = 0.3;
+  w.hazards = w.hazards.filter((h) => h.kind !== "strike" && h.kind !== "sweep");
+  for (const h of w.bullets) {
+    if (h.friendly || h.life <= 0) continue;
+    h.life = 0;
+    puff(w, h.x, h.y, STYLE.bathBomb, 18, 0.22);
+  }
+  burst(w, x, y, "#ffe14a", 16, 230, true);
+  burst(w, x, y, "#f7fbff", 10, 200, false);
+  ring(w, x, y, "#ffe14a", 0.4, 12, 2.6);
+  ring(w, e.x, e.y, "#f4fbff", 0.5, e.r, 2);
+  addTrauma(w, 0.5);
+  w.hitstop = 0.07;
+  float(w, x, y - 26, `${weak.name} BLOWN!`, true);
+  w.banner = "IT CHOKES – ITS SHOTS FIZZLE";
+  w.bannerT = 1.3;
+  w.cues.push("valve");
+  w.cues.push("big");
+  if (!w.arcade) note(w, "weak");
 }
 
 /** What the six newer guns' shots do on their way: curl, bounce, swell, soak. */
@@ -3169,8 +3386,9 @@ function teamwork(w: World, dt: number) {
     if (!friend.alive) continue;
     const near = Math.hypot(fallen.x - friend.x, fallen.y - friend.y) < REVIVE_REACH;
     fallen.revive = near ? (fallen.revive ?? 0) + dt : Math.max(0, (fallen.revive ?? 0) - dt * 0.6);
-    if ((fallen.revive ?? 0) >= REVIVE_TIME) {
+    if ((fallen.revive ?? 0) >= REVIVE_TIME * (perk(w, "quick_rescue") ? 0.5 : 1)) {
       note(w, "revives");
+      note(w, friend === w.wing ? "rescue2" : "rescue1");
       fallen.down = false;
       fallen.alive = true;
       fallen.lives = 1;
@@ -3316,6 +3534,7 @@ export function step(w: World, dt: number, input: InputState) {
       e.push = (e.push ?? 0) * Math.max(0, 1 - 5 * wasDt);
     }
     if (e.kind === "boss") {
+      stepWeak(w, e, dt);
       e.fire -= dt;
       if (e.fire <= 0 && w.freeze <= 0 && !w.intro) {
         runBoss(w, e);
@@ -3400,6 +3619,18 @@ export function step(w: World, dt: number, input: InputState) {
 
   for (const b of w.bullets) {
     if (!b.friendly || b.life <= 0) continue;
+    if (w.bossUp && !w.intro && b.style !== STYLE.bathBomb && b.style !== STYLE.paperRoll) {
+      // a boss's weak point is hit before its body: it sits on the rim, toward the pilot
+      for (const e of w.enemies) {
+        const weak = e.weak;
+        if (!weak || e.hp <= 0 || (b.hit && b.hit.includes(e))) continue;
+        if (Math.hypot(b.x - e.x - weak.dx, b.y - e.y - weak.dy) < weak.r + b.r) {
+          hitWeak(w, e, b);
+          break;
+        }
+      }
+      if (b.life <= 0) continue;
+    }
     for (const e of w.enemies) {
       if (e.hp <= 0) continue;
       if (b.hit && b.hit.includes(e)) continue;
@@ -3625,8 +3856,13 @@ function finishLevel(w: World) {
   const earned = starsOf(w.perfect, noBomb, counted ? w.slain : 1, counted ? Math.max(1, w.born) : 1, fast, boss);
   if (w.kind === "storm" && w.perfect && !w.arcade) note(w, "stormClean");
   if (w.wing && !w.arcade) {
-    if (w.tally[0] > w.tally[1]) w.series[0] += 1;
-    else if (w.tally[1] > w.tally[0]) w.series[1] += 1;
+    if (w.tally[0] > w.tally[1]) {
+      w.series[0] += 1;
+      note(w, "lvlWin1");
+    } else if (w.tally[1] > w.tally[0]) {
+      w.series[1] += 1;
+      note(w, "lvlWin2");
+    }
   }
   w.starShow = `${"★".repeat(earned)}${"☆".repeat(Math.max(0, 3 - earned))}`;
   if (!w.arcade) w.meta.stars[w.level] = Math.max(w.meta.stars[w.level] ?? 0, earned);
@@ -3675,7 +3911,10 @@ function finishLevel(w: World) {
     const kit = loadoutOf(w.meta);
     w.meta.level = w.level + 1;
     const chapterEnd = isBossLevel(w.level);
-    if (chapterEnd || !w.meta.autoAdvance) w.mode = "clear";
+    // a mini-boss or a boss down: three perks on the table before the next level
+    const perky = chapterEnd || w.kind === "mini";
+    if (perky) offerPerks(w);
+    if (perky || !w.meta.autoAdvance) w.mode = "clear";
     else {
       w.mode = "bridge";
       w.bridgeT = 2.5;
@@ -3949,6 +4188,10 @@ function stepDuel(w: World, dt: number, input: InputState) {
       if (Math.max(d.wins[0], d.wins[1]) >= DUEL_WINS) {
         w.mode = "duelover";
         w.bullets = [];
+        // the record between the two pilots is kept for good; the mop is worn until the page is closed
+        const won = d.wins[0] > d.wins[1] ? 0 : 1;
+        w.cleaner = 1 - won;
+        note(w, won === 0 ? "duelWin1" : "duelWin2");
         note(w, "duels");
         persist(w, w.snap);
         return;

@@ -10,7 +10,7 @@ It's a love letter to the shooters we grew up on, mostly _Star Defender 2_ and _
 
 - **100 levels** in 10 rooms of the house, from the Old Bathroom through the Sewer and the Hot Kitchen to the Throne Room. Every room has its own army and its own boss.
 - **Two pilots on one screen.** Grab a friend. Stay close and you both hit harder; if one of you goes down, the other can fly over and pick them back up. Fill both Super Flush bars, press bomb together, and the whole screen goes down the drain. After every level a card says who shot more, and gives the other one a title they did not ask for.
-- **Duel.** The same friend, now your enemy. One of you at the bottom, one at the top, gifts drifting down the middle, first to three rounds. Loser cleans the bathroom.
+- **Duel.** The same friend, now your enemy. One of you at the bottom, one at the top, gifts drifting down the middle, first to three rounds. The loser is the **Poop Cleaner**: it says so across the screen, and they fly with a mop on their ship until somebody wins it off them. The game keeps the all-time score between the two of you.
 - **Twelve guns**, each with its own way of working: Bubble Blaster, Soap Cannon, Toothpaste Laser, Zap Brush, Flush Wave, Freshener Mist, and six that came later: a Hair Dryer that shoves them back, a Bidet Hose that whips when you swing the ship, a Rubber Slingshot that bounces off the walls, a Paper Streamer that curls after whatever is nearest, a Sponge Bomber that soaks up enemy shots, and a Squeaky Duck whose squeak slows them down. Each pilot picks their own.
 - **Gun power is bought, not found.** Six steps, sold in the shop, kept for good, the same for every gun and both pilots. More power means more of it in the air at once.
 - **Three second weapons** with limited ammo: homing plunger missiles, bath bombs and a paper roll that unrolls across a whole line.
@@ -18,6 +18,9 @@ It's a love letter to the shooters we grew up on, mostly _Star Defender 2_ and _
 - **Enemies that fly in formation.** They loop in from the sides, settle into rows, diamonds, columns and arrowheads, and peel off to dive at you.
 - **No two levels in a row feel the same.** Every room has a poop storm to survive (shoot it or dodge it), a bonus round, a mini-boss with bodyguards, and a pipe run where you thread the gaps or blast the valve and burst the whole pipe.
 - **Bosses with a move of their own.** Each one arrives with a name card and marks a column or a strip of the screen before it strikes, so you always get to see it coming.
+- **Boss weak points.** Now and then a yellow dotted ring lights up on the boss: a valve, a lid, a handle. Shoot it out and the boss takes a lump of damage, chokes for a few seconds, and everything it had in the air fizzles.
+- **Perks.** Every mini-boss and every boss leaves you one of three: more punch, more cash, a spare shield, small fry that burst. Some are cursed, some only work with two pilots. They last until you lose every life.
+- **The Poop-Dex.** An album of all 84 critters, the ten bosses and fourteen kinds of poop, each with a line about it and a count of how many you have flushed. Every room whose pages you fill pays cash.
 - **A shop with a firing range.** Power, guns, ships and gear, and a window where the gun you are looking at fires at real targets before you pay for it.
 - **Three difficulty levels**, and **New Game+** once the Toilet King is down: the whole house again, tougher and better paid.
 - **Arcade mode** (no saves, no end, it just keeps getting worse) and a **Daily** run of 30 stages that's the same for everyone that day.

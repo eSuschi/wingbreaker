@@ -276,7 +276,10 @@ export function planLevel(level: number, W: number, H: number, seed: number) {
   for (let wave = 0; wave < waves; wave++) {
     const n = wave === waves - 1 ? left : Math.max(4, Math.round(total / waves));
     left -= n;
-    const form = forms[Math.floor(rng() * (ch === 0 && k < 4 ? 4 : forms.length))] ?? "grid";
+    const rolled = forms[Math.floor(rng() * (ch === 0 && k < 4 ? 4 : forms.length))] ?? "grid";
+    // a room whose army has a lid or a broom shows it for certain on its seventh level,
+    // so its page in the Poop-Dex can always be filled
+    const form = k === 7 && wave === 0 && armyHas(ch, "wall") ? "wall" : rolled;
     const at = wave * 2.1;
     const first = out.length;
     // which way this wave flies in; the very first levels keep to the gentle ones
@@ -897,6 +900,9 @@ export const TIPS = [
   "Tip: Anything in a soap bubble is a gift. Anything with a red-orange outline wants you dead.",
   "Tip: A hit knocks off the gift boost, never the power you paid for.",
   "Tip: Twelve guns in the shop. Each pilot picks their own.",
+  "Tip: A boss shows a yellow dotted ring now and then. Shoot it out: the boss chokes and its shots fizzle.",
+  "Tip: Every mini-boss and every boss leaves you a perk: one of three. They last until you lose every life.",
+  "Tip: The Poop-Dex pays $200 for every room whose pages you fill.",
   "Tip: Every kill charges your next bomb. Watch the bar by the bomb boxes.",
   "Tip: Fart clouds don't hurt. They just push. Like your aunt.",
   "Tip: Not using bombs pays extra. Being brave has a price tag.",

@@ -178,6 +178,7 @@ export function drawWorld(ctx: CanvasRenderingContext2D, w: World, focus: boolea
   for (const pk of w.pickups) drawPickup(ctx, pk.kind, pk.x, pk.y, w.time, pk.hue ?? (pk.kind === "W" ? -1 : 0));
   for (const e of w.enemies) drawEnemy(ctx, e, w.time, w.player.x, w.player.y);
   for (const p of w.pops) drawPop(ctx, p);
+  for (const e of w.enemies) if (e.weak && e.hp > 0 && !w.intro) drawWeak(ctx, e, w.time);
 
   for (const b of w.bullets) {
     if (b.friendly) drawShot(ctx, b, w.time, w.duel ? TEAM[b.owner === 1 ? 1 : 0] : undefined);
@@ -189,6 +190,11 @@ export function drawWorld(ctx: CanvasRenderingContext2D, w: World, focus: boolea
   if (showShip && w.wing && w.link) drawLink(ctx, w.player, w.wing, w.time);
   if (showShip && w.player.alive) drawPlayer(ctx, w, w.player, focus, skinDef(w.meta.skin), w.meta.skin);
   if (showShip && w.wing?.alive) drawPlayer(ctx, w, w.wing, false, skinDef(w.meta.skin2), w.meta.skin2);
+  // whoever lost the last duel flies with the mop on, in a duel and in the campaign alike
+  if (showShip && w.wing && w.cleaner != null && !w.range) {
+    const who = w.cleaner === 1 ? w.wing : w.player;
+    if (who.alive) drawMop(ctx, who, w.time, !!w.duel && who === w.wing);
+  }
   if (showShip && w.player.down) drawWreck(ctx, w.player, w.meta.skin, w.time);
   if (showShip && w.wing?.down) drawWreck(ctx, w.wing, w.meta.skin2, w.time);
 
@@ -273,6 +279,117 @@ export function drawWorld(ctx: CanvasRenderingContext2D, w: World, focus: boolea
   if (w.duel) {
     if (w.mode === "play" || w.mode === "pause" || w.mode === "duelover") drawDuelHud(ctx, w);
   } else if (!w.range && (w.mode === "play" || w.mode === "pause" || w.mode === "bridge" || w.mode === "clear" || w.mode === "over" || w.mode === "victory")) drawHud(ctx, w);
+}
+
+/**
+ * A boss's weak point: a yellow dotted ring that turns, with a bright middle.
+ * Gifts wear a soap bubble and enemy shots a red-orange outline; nothing else in the game is dotted yellow.
+ */
+function drawWeak(ctx: CanvasRenderingContext2D, e: Enemy, time: number) {
+  const weak = e.weak;
+  if (!weak) return;
+  const x = e.x + weak.dx;
+  const y = e.y + weak.dy;
+  const beat = 1 + Math.sin(time * 7) * 0.08;
+  const grow = Math.min(1, weak.age * 4);
+  const r = weak.r * beat * grow;
+  ctx.save();
+  ctx.translate(x, y);
+  const glow = ctx.createRadialGradient(0, 0, 1, 0, 0, r * 1.5);
+  glow.addColorStop(0, "rgba(255,225,74,0.55)");
+  glow.addColorStop(1, "rgba(255,225,74,0)");
+  ctx.fillStyle = glow;
+  ctx.beginPath();
+  ctx.arc(0, 0, r * 1.5, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.rotate(time * 1.6);
+  ctx.setLineDash([5, 4.5]);
+  ctx.lineWidth = 5;
+  ctx.strokeStyle = "rgba(20,14,4,0.85)";
+  ctx.beginPath();
+  ctx.arc(0, 0, r, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.lineWidth = 2.6;
+  ctx.strokeStyle = "#ffe14a";
+  ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.rotate(-time * 1.6);
+  // what is left of it: the middle shrinks as it is shot
+  const left = Math.max(0, weak.hp / weak.max);
+  ctx.fillStyle = "rgba(20,14,4,0.85)";
+  ctx.beginPath();
+  ctx.arc(0, 0, r * 0.5 + 1.5, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = "#ffe14a";
+  ctx.beginPath();
+  ctx.arc(0, 0, Math.max(2, r * 0.5 * (0.35 + 0.65 * left)), 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = "#fffbe0";
+  ctx.beginPath();
+  ctx.arc(-r * 0.12, -r * 0.12, Math.max(1, r * 0.14), 0, Math.PI * 2);
+  ctx.fill();
+  if (weak.age < 2.4) {
+    ctx.globalAlpha = Math.min(1, (2.4 - weak.age) * 2);
+    ctx.font = "700 12px Barlow Condensed, sans-serif";
+    ctx.textAlign = "center";
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = "rgba(8,10,14,0.9)";
+    ctx.strokeText(`SHOOT THE ${weak.name}`, 0, r + 15);
+    ctx.fillStyle = "#ffe14a";
+    ctx.fillText(`SHOOT THE ${weak.name}`, 0, r + 15);
+  }
+  ctx.restore();
+}
+
+/** The loser's hat: a mop head sat on the ship, strands swaying, and what it makes them, in writing. */
+function drawMop(ctx: CanvasRenderingContext2D, p: Player, time: number, flip: boolean) {
+  ctx.save();
+  ctx.translate(p.x, p.y);
+  ctx.rotate(p.bank);
+  if (flip) ctx.rotate(Math.PI);
+  ctx.scale(1.3, 1.3);
+  // the handle, sticking out behind one shoulder
+  ctx.lineCap = "round";
+  ctx.strokeStyle = "#3a281e";
+  ctx.lineWidth = 5;
+  ctx.beginPath();
+  ctx.moveTo(2, -12);
+  ctx.lineTo(19, -30);
+  ctx.stroke();
+  ctx.strokeStyle = "#c08a4e";
+  ctx.lineWidth = 3;
+  ctx.stroke();
+  // the strands
+  for (let i = 0; i < 9; i++) {
+    const k = i / 8 - 0.5;
+    const sway = Math.sin(time * 5 + i * 1.3) * 2.2;
+    ctx.beginPath();
+    ctx.moveTo(k * 10, -12);
+    ctx.quadraticCurveTo(k * 22 + sway, -4, k * 30 + sway * 1.6, 6 + Math.abs(k) * -5);
+    ctx.strokeStyle = "#3a281e";
+    ctx.lineWidth = 4.6;
+    ctx.stroke();
+    ctx.strokeStyle = i % 2 ? "#efe6d0" : "#d9cdb0";
+    ctx.lineWidth = 2.8;
+    ctx.stroke();
+  }
+  // the clamp that holds them
+  ctx.fillStyle = "#3f7fe0";
+  ctx.strokeStyle = "#3a281e";
+  ctx.lineWidth = 1.4;
+  ctx.fillRect(-8, -16, 16, 6);
+  ctx.strokeRect(-8, -16, 16, 6);
+  ctx.restore();
+  ctx.save();
+  ctx.font = "700 11px Barlow Condensed, sans-serif";
+  ctx.textAlign = "center";
+  ctx.lineWidth = 3;
+  ctx.strokeStyle = "rgba(8,10,14,0.85)";
+  const y = p.y + (flip ? -44 : 56);
+  ctx.strokeText("POOP CLEANER", p.x, y);
+  ctx.fillStyle = "#d9a441";
+  ctx.fillText("POOP CLEANER", p.x, y);
+  ctx.restore();
 }
 
 /** A pseudo-random number in 0..1 that is always the same for the same pair. */
